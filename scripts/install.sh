@@ -37,19 +37,19 @@ info "Found go $GO_VERSION"
 # ── Build ─────────────────────────────────────────────────────────────────────
 
 info "Cloning kpm..."
-git clone --depth 1 --branch "$BRANCH" "$REPO" "$BUILD_DIR/kpm" 2>&1 | tail -1
+git clone --depth 1 --branch "$BRANCH" "$REPO" "$BUILD_DIR/src" 2>&1 | tail -1
 
 info "Building kpm (1 dependency: yaml.v3)..."
-cd "$BUILD_DIR/kpm"
-go build -o "$BUILD_DIR/kpm" ./cmd/kpm/ 2>&1
+cd "$BUILD_DIR/src"
+go build -o "$BUILD_DIR/kpm-bin" ./cmd/kpm/ 2>&1
 
 # ── Install ───────────────────────────────────────────────────────────────────
 
 if [ -w "$INSTALL_DIR" ]; then
-    mv "$BUILD_DIR/kpm" "$INSTALL_DIR/kpm"
+    mv "$BUILD_DIR/kpm-bin" "$INSTALL_DIR/kpm"
 else
     info "Installing to $INSTALL_DIR (requires sudo)..."
-    sudo mv "$BUILD_DIR/kpm" "$INSTALL_DIR/kpm"
+    sudo mv "$BUILD_DIR/kpm-bin" "$INSTALL_DIR/kpm"
 fi
 
 chmod +x "$INSTALL_DIR/kpm"
