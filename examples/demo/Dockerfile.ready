@@ -10,9 +10,7 @@ RUN git clone --depth 1 https://github.com/TheGenXCoder/kpm.git /tmp/kpm-src \
 RUN curl -sL https://github.com/TheGenXCoder/agentkms/releases/download/v0.1.1/agentkms-dev-linux-amd64 -o /usr/local/bin/agentkms-dev \
     && chmod +x /usr/local/bin/agentkms-dev
 
-# Build mock-codex
-COPY mock-codex/ /tmp/mock-codex/
-RUN cd /tmp/mock-codex && go build -o /usr/local/bin/mock-codex . && rm -rf /tmp/mock-codex
+# mock-codex is already in kpm-base
 
 # Run quickstart (generates PKI, seeds secrets, writes config + templates)
 # Server won't persist across container restarts, but config/certs/templates will

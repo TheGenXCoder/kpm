@@ -1,3 +1,9 @@
 FROM archlinux:latest
 RUN pacman -Sy --noconfirm go git curl neovim tmux tree fastfetch
+
+# Build mock-codex (demo app that simulates an AI coding tool)
+COPY mock-codex/ /tmp/mock-codex/
+RUN cd /tmp/mock-codex && go build -o /usr/local/bin/mock-codex . && rm -rf /tmp/mock-codex
+
 RUN echo 'fastfetch' >> /root/.bashrc
+WORKDIR /app
