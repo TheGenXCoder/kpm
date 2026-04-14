@@ -27,6 +27,8 @@ Usage:
   kpm init                        Create ~/.kpm/config.yaml
   kpm tree                        Show template hierarchy and managed secrets
   kpm show [VAR_NAME]             Show managed secrets in current environment
+  kpm config push [dir]           Push templates to AgentKMS (requires agentkms-dev)
+  kpm config pull [dir]           Pull templates from AgentKMS
   kpm version                     Print version
 
 Global flags:
@@ -98,7 +100,7 @@ func main() {
 		// Hidden internal command — started by kpm env to run a persistent listener.
 		runListen()
 		return
-	case "env", "export", "run", "get", "init", "decrypt":
+	case "env", "export", "run", "get", "init", "decrypt", "config":
 		if err := fs.Parse(os.Args[2:]); err != nil {
 			os.Exit(1)
 		}
@@ -132,9 +134,43 @@ func main() {
 
 	ctx := context.Background()
 
+	home, _ := os.UserHomeDir()
+
 	switch subcmd {
 	case "init":
 		runInit(*configPath)
+	case "config":
+		args := fs.Args()
+		if len(args) == 0 {
+			fmt.Fprintln(os.Stderr, "kpm config: subcommand required (push or pull)")
+			os.Exit(1)
+		}
+		switch args[0] {
+		case "push":
+			dir := filepath.Join(home, ".kpm", "templates")
+			if len(args) > 1 {
+				dir = args[1]
+			}
+			fmt.Fprintf(os.Stderr, "Pushing templates from %s\n", dir)
+			if err := kpm.PushTemplates(os.Stderr, dir); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+		case "pull":
+			dir := filepath.Join(home, ".kpm", "templates")
+			if len(args) > 1 {
+				dir = args[1]
+			}
+			client := buildClient(cfg)
+			fmt.Fprintf(os.Stderr, "Pulling templates to %s\n", dir)
+			if err := kpm.PullTemplates(ctx, os.Stderr, client, dir); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+		default:
+			fmt.Fprintf(os.Stderr, "kpm config: unknown subcommand %q (use push or pull)\n", args[0])
+			os.Exit(1)
+		}
 	case "env", "export":
 		tmplPath := *templateFlag
 		if tmplPath == "" {
