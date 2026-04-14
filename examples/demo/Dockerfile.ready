@@ -1,7 +1,10 @@
 FROM kpm-base
 
 # Install KPM (lean — 1 dependency)
-RUN curl -sL https://raw.githubusercontent.com/TheGenXCoder/kpm/main/scripts/install.sh | bash
+# Build from source directly (avoids GitHub CDN cache issues)
+RUN git clone --depth 1 https://github.com/TheGenXCoder/kpm.git /tmp/kpm-src \
+    && cd /tmp/kpm-src && go build -o /usr/local/bin/kpm ./cmd/kpm/ \
+    && rm -rf /tmp/kpm-src
 
 # Build agentkms-dev separately (has more deps — only needed for local dev server)
 RUN git clone --depth 1 --branch feat/kpm-go-rewrite https://github.com/TheGenXCoder/agentkms.git /tmp/agentkms-src \
