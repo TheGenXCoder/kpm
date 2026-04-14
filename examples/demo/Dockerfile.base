@@ -1,2 +1,3 @@
 FROM archlinux:latest
-RUN pacman -Sy --noconfirm go git curl neovim tmux
+RUN pacman -Sy --noconfirm go git curl neovim tmux tree fastfetch
+RUN echo 'fastfetch' >> /root/.bashrc
