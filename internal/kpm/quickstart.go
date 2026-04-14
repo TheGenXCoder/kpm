@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/TheGenXCoder/kpm/pkg/tlsutil"
@@ -175,12 +176,67 @@ JWT_SECRET=${kms:kv/app/config#jwt_secret}
 	return nil
 }
 
-// buildDevServer clones the repo and builds agentkms-dev from source.
-// This is called by quickstart when agentkms-dev is not in PATH.
+// releaseURL is the download URL pattern for pre-built agentkms-dev binaries.
+const releaseURL = "https://github.com/TheGenXCoder/agentkms/releases/download/v0.1.1/agentkms-dev-%s-%s"
+
+// buildDevServer downloads a pre-built agentkms-dev binary.
+// Falls back to building from source if the download fails.
 func buildDevServer(w io.Writer) (string, error) {
-	// Check for go
+	goos := runtime.GOOS
+	goarch := runtime.GOARCH
+	url := fmt.Sprintf(releaseURL, goos, goarch)
+
+	installDir := "/usr/local/bin"
+	destPath := filepath.Join(installDir, "agentkms-dev")
+
+	// Try downloading pre-built binary first.
+	fmt.Fprintf(w, "  Downloading agentkms-dev (%s/%s)...\n", goos, goarch)
+	tmpFile, err := os.CreateTemp("", "agentkms-dev-*")
+	if err != nil {
+		return "", fmt.Errorf("create temp file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath)
+
+	resp, dlErr := http.Get(url)
+	if dlErr == nil && resp.StatusCode == http.StatusOK {
+		_, copyErr := io.Copy(tmpFile, resp.Body)
+		resp.Body.Close()
+		tmpFile.Close()
+
+		if copyErr == nil {
+			os.Chmod(tmpPath, 0755)
+			// Install
+			if err := os.Rename(tmpPath, destPath); err != nil {
+				sudo := exec.Command("sudo", "mv", tmpPath, destPath)
+				sudo.Stderr = w
+				if sudoErr := sudo.Run(); sudoErr != nil {
+					home, _ := os.UserHomeDir()
+					installDir = filepath.Join(home, "go", "bin")
+					os.MkdirAll(installDir, 0755)
+					destPath = filepath.Join(installDir, "agentkms-dev")
+					if renameErr := os.Rename(tmpPath, destPath); renameErr != nil {
+						return "", fmt.Errorf("install: %w", renameErr)
+					}
+				}
+			}
+			os.Chmod(destPath, 0755)
+			return destPath, nil
+		}
+	}
+	if resp != nil {
+		resp.Body.Close()
+	}
+	tmpFile.Close()
+
+	// Fallback: build from source.
+	fmt.Fprintln(w, "  Download failed — building from source...")
+	return buildDevServerFromSource(w)
+}
+
+func buildDevServerFromSource(w io.Writer) (string, error) {
 	if _, err := exec.LookPath("go"); err != nil {
-		return "", fmt.Errorf("go is required to build agentkms-dev")
+		return "", fmt.Errorf("go is required to build agentkms-dev (download also failed)")
 	}
 	if _, err := exec.LookPath("git"); err != nil {
 		return "", fmt.Errorf("git is required to build agentkms-dev")
@@ -192,9 +248,8 @@ func buildDevServer(w io.Writer) (string, error) {
 	}
 	defer os.RemoveAll(buildDir)
 
-	// Clone
 	fmt.Fprintln(w, "  Cloning agentkms repo...")
-	clone := exec.Command("git", "clone", "--depth", "1", "--branch", "feat/kpm-go-rewrite",
+	clone := exec.Command("git", "clone", "--depth", "1",
 		"https://github.com/TheGenXCoder/agentkms.git", filepath.Join(buildDir, "agentkms"))
 	clone.Stdout = io.Discard
 	clone.Stderr = io.Discard
@@ -202,7 +257,6 @@ func buildDevServer(w io.Writer) (string, error) {
 		return "", fmt.Errorf("git clone: %w", err)
 	}
 
-	// Build
 	fmt.Fprintln(w, "  Building agentkms-dev server...")
 	outPath := filepath.Join(buildDir, "agentkms-dev")
 	build := exec.Command("go", "build", "-o", outPath, "./cmd/dev/")
@@ -213,16 +267,12 @@ func buildDevServer(w io.Writer) (string, error) {
 		return "", fmt.Errorf("go build: %w", err)
 	}
 
-	// Install to /usr/local/bin or ~/go/bin
 	installDir := "/usr/local/bin"
 	destPath := filepath.Join(installDir, "agentkms-dev")
-
-	// Try direct move first, sudo if needed
 	if err := os.Rename(outPath, destPath); err != nil {
 		sudo := exec.Command("sudo", "mv", outPath, destPath)
 		sudo.Stderr = w
 		if err := sudo.Run(); err != nil {
-			// Fallback: install to ~/go/bin
 			home, _ := os.UserHomeDir()
 			installDir = filepath.Join(home, "go", "bin")
 			os.MkdirAll(installDir, 0755)
@@ -233,7 +283,6 @@ func buildDevServer(w io.Writer) (string, error) {
 		}
 	}
 	os.Chmod(destPath, 0755)
-
 	return destPath, nil
 }
 
