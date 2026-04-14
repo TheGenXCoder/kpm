@@ -5,5 +5,5 @@ RUN pacman -Sy --noconfirm go git curl neovim tmux tree fastfetch
 COPY mock-codex/ /tmp/mock-codex/
 RUN cd /tmp/mock-codex && go build -o /usr/local/bin/mock-codex . && rm -rf /tmp/mock-codex
 
-RUN echo 'fastfetch' >> /root/.bashrc
+COPY bashrc /root/.bashrc
 WORKDIR /app

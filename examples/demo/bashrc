@@ -1,0 +1,4 @@
+# aliases
+alias ls='ls -la'
+
+fastfetch
