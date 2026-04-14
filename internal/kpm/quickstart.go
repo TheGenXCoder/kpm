@@ -129,7 +129,7 @@ session_key_ttl: 3600
 	}
 
 	shellEnv := `# Shell environment — add to .zshrc:
-# eval $(kpm env --from ~/.kpm/templates/shell-env.template --plaintext --output shell 2>/dev/null)
+# eval $(kpm env --from ~/.kpm/templates/shell-env.template --output shell 2>/dev/null)
 ANTHROPIC_API_KEY=${kms:llm/anthropic}
 OPENAI_API_KEY=${kms:llm/openai}
 GITHUB_TOKEN=${kms:kv/github#token}
@@ -168,7 +168,7 @@ JWT_SECRET=${kms:kv/app/config#jwt_secret}
 	fmt.Fprintln(w, "  kpm env --from .kpm/templates/.env.template --plaintext # raw values")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Add to your .zshrc:")
-	fmt.Fprintln(w, `  eval $(kpm env --from ~/.kpm/templates/shell-env.template --plaintext --output shell 2>/dev/null)`)
+	fmt.Fprintln(w, `  eval $(kpm env --from ~/.kpm/templates/shell-env.template --output shell 2>/dev/null)`)
 
 	// Detach the server process so it survives kpm exit
 	serverCmd.Process.Release() //nolint:errcheck

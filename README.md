@@ -57,7 +57,7 @@ kpm quickstart
 kpm tree
 
 # Load secrets into your shell
-eval $(kpm env --from ~/.kpm/templates/shell-env.template --plaintext --output shell)
+eval $(kpm env --from ~/.kpm/templates/shell-env.template --output shell)
 
 # Inspect what's in the current environment
 kpm show
@@ -235,7 +235,7 @@ All flag values override config file values.
 Add to `~/.zshrc` or `~/.bashrc` to load secrets into your shell on startup:
 
 ```bash
-eval $(kpm env --from ~/.kpm/templates/shell-env.template --plaintext --output shell 2>/dev/null)
+eval $(kpm env --from ~/.kpm/templates/shell-env.template --output shell 2>/dev/null)
 ```
 
 ---

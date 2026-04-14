@@ -32,7 +32,7 @@ session_key_ttl: 3600\n' > ~/.kpm/config.yaml
 
 # User-level templates
 RUN printf '\
-# Shell environment — eval $(kpm env --from ~/.kpm/templates/shell-env.template --plaintext --output shell)\n\
+# Shell environment — eval $(kpm env --from ~/.kpm/templates/shell-env.template --output shell)\n\
 ANTHROPIC_API_KEY=${kms:llm/anthropic}\n\
 OPENAI_API_KEY=${kms:llm/openai}\n\
 GITHUB_TOKEN=${kms:kv/github#token}\n' > ~/.kpm/templates/shell-env.template

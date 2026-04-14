@@ -38,7 +38,7 @@ echo "  # Plaintext output — explicit opt-in"
 echo "  kpm env --from .kpm/templates/.env.template --plaintext"
 echo ""
 echo "  # Load shell env from user template (like .zshrc would)"
-echo "  eval \$(kpm env --from ~/.kpm/templates/shell-env.template --plaintext --output shell)"
+echo "  eval \$(kpm env --from ~/.kpm/templates/shell-env.template --output shell)"
 echo "  echo \$ANTHROPIC_API_KEY"
 echo ""
 
