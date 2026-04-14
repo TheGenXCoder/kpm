@@ -1,0 +1,7 @@
+server: https://agentkms.catalyst9.ai
+cert: ~/.kpm/certs/client.crt
+key: ~/.kpm/certs/client.key
+ca: ~/.kpm/certs/ca.crt
+default_template: .env.template
+secure_mode: false
+session_key_ttl: 300

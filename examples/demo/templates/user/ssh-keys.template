@@ -1,0 +1,3 @@
+# SSH key material — loaded into ssh-agent on demand
+# Usage: kpm get kv/ssh/deploy#private_key | ssh-add -
+SSH_DEPLOY_KEY=${kms:kv/ssh/deploy#private_key}

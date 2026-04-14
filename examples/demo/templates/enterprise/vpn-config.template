@@ -1,0 +1,4 @@
+# Corporate VPN config — pushed by IT/DevOps
+# Location: /etc/catalyst9/.kpm/templates/vpn-config.template
+VPN_CERT=${kms:kv/vpn/corp#cert}
+VPN_KEY=${kms:kv/vpn/corp#key}

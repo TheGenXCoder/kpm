@@ -1,0 +1,55 @@
+FROM kpm-base
+
+# Install KPM (lean — 1 dependency)
+RUN curl -sL https://raw.githubusercontent.com/TheGenXCoder/kpm/main/scripts/install.sh | bash
+
+# Build agentkms-dev separately (has more deps — only needed for local dev server)
+RUN git clone --depth 1 --branch feat/kpm-go-rewrite https://github.com/TheGenXCoder/agentkms.git /tmp/agentkms-src \
+    && cd /tmp/agentkms-src && go build -o /usr/local/bin/agentkms-dev ./cmd/dev/ \
+    && rm -rf /tmp/agentkms-src
+
+# Build mock-codex
+COPY mock-codex/ /tmp/mock-codex/
+RUN cd /tmp/mock-codex && go build -o /usr/local/bin/mock-codex . && rm -rf /tmp/mock-codex
+
+# Run quickstart (generates PKI, seeds secrets, writes config + templates)
+# Server won't persist across container restarts, but config/certs/templates will
+RUN agentkms-dev enroll \
+    && mkdir -p ~/.kpm/certs \
+    && cp ~/.agentkms/dev/clients/forge-gateway/ca.crt ~/.kpm/certs/ \
+    && cp ~/.agentkms/dev/clients/forge-gateway/client.crt ~/.kpm/certs/ \
+    && cp ~/.agentkms/dev/clients/forge-gateway/client.key ~/.kpm/certs/
+
+# Write config
+RUN mkdir -p ~/.kpm/templates && printf '\
+server: https://127.0.0.1:8443\n\
+cert: ~/.kpm/certs/client.crt\n\
+key: ~/.kpm/certs/client.key\n\
+ca: ~/.kpm/certs/ca.crt\n\
+default_template: .env.template\n\
+secure_mode: false\n\
+session_key_ttl: 3600\n' > ~/.kpm/config.yaml
+
+# User-level templates
+RUN printf '\
+# Shell environment — eval $(kpm env --from ~/.kpm/templates/shell-env.template --plaintext --output shell)\n\
+ANTHROPIC_API_KEY=${kms:llm/anthropic}\n\
+OPENAI_API_KEY=${kms:llm/openai}\n\
+GITHUB_TOKEN=${kms:kv/github#token}\n' > ~/.kpm/templates/shell-env.template
+
+# Project-level template
+RUN mkdir -p /app/.kpm/templates && printf '\
+APP_NAME=my-service\n\
+LOG_LEVEL=info\n\
+PORT=8080\n\
+DB_HOST=${kms:kv/db/prod#host}\n\
+DB_PORT=${kms:kv/db/prod#port}\n\
+DB_PASSWORD=${kms:kv/db/prod#password}\n\
+JWT_SECRET=${kms:kv/app/config#jwt_secret}\n' > /app/.kpm/templates/.env.template
+
+# Entrypoint: start dev server, seed secrets, drop to shell
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+WORKDIR /app
+ENTRYPOINT ["/entrypoint.sh"]

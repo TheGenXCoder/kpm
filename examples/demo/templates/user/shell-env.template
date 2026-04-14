@@ -1,0 +1,5 @@
+# Shell environment secrets — sourced by .zshrc / .bashrc
+# Usage: eval $(kpm env --from ~/.kpm/templates/shell-env.template --plaintext --output shell)
+ANTHROPIC_API_KEY=${kms:llm/anthropic}
+OPENAI_API_KEY=${kms:llm/openai}
+GITHUB_TOKEN=${kms:kv/github#token}
