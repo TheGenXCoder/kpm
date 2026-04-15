@@ -1,173 +1,292 @@
 # kpm
 
-**Secure secrets CLI. Replaces .env files with encrypted, template-based config management.**
+**Stop scattering secrets across your machine. One CLI to store, manage, and inject them — encrypted by default.**
 
-Backed by [AgentKMS](https://github.com/TheGenXCoder/agentkms) in production. Works standalone with a built-in dev server.
+KPM is a secrets lifecycle tool. Add secrets from the command line. Organize them by service. Inject them into your environment as ciphertext that only decrypts at the moment your app needs it. Back it with [AgentKMS](https://github.com/TheGenXCoder/agentkms) in production, or run the built-in dev server locally.
+
+```bash
+# Install
+curl -sL kpm.catalyst9.ai/install | bash
+
+# Set up a local dev environment (no server needed)
+kpm quickstart
+
+# Add a secret
+kpm add cloudflare/dns-token --tags dns,ci --type api-token
+
+# See what you have
+kpm list
+```
+
+```
+cloudflare/
+  dns-token              api-token      [dns, ci]        v1
+
+anthropic/
+  api-key                api-token      [dev, ci]        v1
+
+ssh/
+  deploy-key             ssh-key                         v1
+
+3 secrets across 3 services
+```
 
 ---
 
-## The Problem
+## Why
 
-Your `.env` file is plaintext. It's on disk, in git history, in process memory, and showing up in CI logs. Every tool that reads it gets the raw value — whether or not that was intentional. One misconfigured log line and your database password is in Datadog.
+API keys in `.env` files. Tokens in Obsidian notes. SSH keys in `~/.ssh` with no audit trail. Passwords in Slack messages to yourself. You know it's wrong but the alternative — setting up Vault, configuring policies, running a sidecar — is worse than the risk.
 
-## The Solution
-
-Templates live in git. Secrets stay in AgentKMS. Your environment variables hold ciphertext — not plaintext — until the exact moment a process needs them.
-
-```bash
-# .env.template — safe to commit
-APP_NAME=my-service
-DB_PASSWORD=${kms:kv/db/prod#password}
-ANTHROPIC_API_KEY=${kms:llm/anthropic}
-
-# Resolve the template — secrets become encrypted blobs
-$ kpm env --from .env.template
-DB_PASSWORD=ENC[kpm:s1a2b3c4:base64...]
-ANTHROPIC_API_KEY=ENC[kpm:s1a2b3c4:base64...]
-KPM_SESSION=s1a2b3c4
-KPM_DECRYPT_SOCK=/tmp/kpm-s1a2b3c4.sock
-✓ Resolved 2 secrets from AgentKMS
-✓ Encrypted values (AES-256-GCM, session: s1a2b3c4, TTL: 300s)
-
-# Tools get plaintext only at the moment of use
-$ kpm run -- node server.js
-✓ Decrypted 2 secrets from session s1a2b3c4
-```
-
-Attach it to anything:
-
-```bash
-kpm run -- codex
-kpm run -- python train.py
-kpm run -- docker-compose up
-```
+KPM fixes this in two commands. Your secrets go into one place, encrypted, audited, and accessible from any machine.
 
 ---
 
 ## Quick Start
 
 ```bash
-# Install (requires git and go 1.21+; release binaries coming soon)
-curl -sL https://raw.githubusercontent.com/TheGenXCoder/kpm/main/scripts/install.sh | bash
+# Install (requires go 1.21+ and git; release binaries coming soon)
+curl -sL kpm.catalyst9.ai/install | bash
 
-# Set up a local dev environment — no server configuration needed
+# Quickstart: generates PKI, starts local AgentKMS, seeds demo secrets,
+# writes config + starter templates. Running in under 30 seconds.
 kpm quickstart
+```
 
-# See what's managed
-kpm tree
+### Add your real secrets
 
-# Load secrets into your shell
+```bash
+# Interactive — value is masked (like ssh-keygen)
+kpm add anthropic/api-key --tags dev,ci
+
+# From clipboard
+pbpaste | kpm add github/deploy-pat --tags ci
+
+# From file
+kpm add ssh/deploy-key --from-file ~/.ssh/deploy_key --description "production deploy"
+```
+
+KPM auto-detects the secret type from the value: `sk-` prefix becomes `api-token`, `-----BEGIN OPENSSH` becomes `ssh-key`, `postgres://` becomes `connection-string`.
+
+### Use them
+
+```bash
+# Load into your shell (ciphertext — safe)
 eval $(kpm env --from ~/.kpm/templates/shell-env.template --output shell)
 
-# Inspect what's in the current environment
-kpm show
+# Your env has ciphertext, not plaintext
+echo $ANTHROPIC_API_KEY
+# ENC[kpm:s1a2b3:EncryptedBlobHere...]
 
-# Run anything with secrets injected
-kpm run -- your-app
+# Run any tool — KPM decrypts on the fly for that process only
+kpm run -- codex "fix the auth bug"
+kpm run -- python train.py
+kpm run -- docker-compose up
 ```
 
-`kpm quickstart` handles everything: generates PKI, starts a local AgentKMS dev server, seeds demo secrets, and writes `~/.kpm/config.yaml` and starter templates. You can be running in under 30 seconds.
+When the process exits, the plaintext is gone. Your shell never saw it.
 
 ---
 
-## How It Works
+## Secrets Registry
 
-KPM has three security levels. Pick the one that fits your threat model.
+KPM organizes secrets by `service/name`. Every write is audited and policy-checked through AgentKMS.
 
-### Plaintext mode (`--plaintext`)
-
-Secrets are fetched from AgentKMS over mTLS and injected as plaintext values. Better than `.env` files — nothing on disk, nothing in git — but secret values do briefly exist in the process environment.
+### Commands
 
 ```bash
-kpm env --from .env.template --plaintext
-kpm run --plaintext -- your-app
+kpm add <service/name>           # Store a secret (interactive, pipe, or --from-file)
+kpm list                         # List all secrets (metadata only — never values)
+kpm list --tag ci                # Filter by tag
+kpm list --json                  # JSON output for scripting
+kpm describe <service/name>      # Show metadata (type, tags, description, version)
+kpm history <service/name>       # Version timeline (never values)
+kpm get <service/name>           # Retrieve the actual value
+kpm remove <service/name>        # Soft-delete (--purge for hard delete)
 ```
 
-Best for: trusted local dev machines where simplicity matters.
-
-### Secure mode (default)
-
-Secrets are fetched from AgentKMS, then AES-256-GCM encrypted with a short-lived session key. Ciphertext blobs go into the environment. A background listener on a Unix domain socket decrypts them just-in-time when a process actually needs them.
+### What you see vs what's hidden
 
 ```bash
-# Default behavior — no flag needed
-kpm env --from .env.template
-kpm run -- your-app
+$ kpm describe cloudflare/dns-token
+
+cloudflare/dns-token
+  Type:        api-token
+  Tags:        dns, ci
+  Description: catalyst9.ai DNS edit token
+  Created:     2026-04-15T10:30:00Z
+  Version:     3
 ```
 
-The session key lives only in the background listener process. The child process sees ciphertext. A memory dump or `ps eww` shows blobs, not secrets.
+No value. Ever. Use `kpm get` to retrieve it — that goes through the full auth + policy + audit pipeline.
 
-Best for: CI/CD pipelines, shared developer machines, general hardening.
+### Versioning
 
-### Strict mode (`--strict`)
-
-No session key is ever held locally. Every decrypt request goes over mTLS to AgentKMS, where it is individually audited. If AgentKMS is unreachable or revokes access mid-session, decryption fails immediately.
+Every `kpm add` to an existing path creates a new version. Previous versions are retained (last 10 by default). Version history is metadata only — never exposes values.
 
 ```bash
-kpm run --strict -- your-app
-```
+$ kpm history cloudflare/dns-token
 
-Best for: production deployments, compliance requirements, high-threat environments.
+cloudflare/dns-token — 3 versions
+
+  v3  2026-04-15T15:00:00Z  bert    (current)
+  v2  2026-04-15T12:00:00Z  bert
+  v1  2026-04-15T10:30:00Z  bert
+```
 
 ---
 
-## Template Hierarchy
+## Encrypted Environment
 
-Templates are organized in three levels. KPM merges them — project overrides user overrides enterprise.
+KPM defaults to secure mode. Your environment variables contain ciphertext, not plaintext.
 
-```
-$ kpm tree
+### How it works
 
-Enterprise: /etc/catalyst9/.kpm/templates
-  (no templates found)
-
-User: /Users/you/.kpm/templates
-  shell-env.template        3 secrets [llm/anthropic, llm/openai, kv/github#token]
-
-Project: /path/to/project/.kpm/templates
-  .env.template             4 secrets [kv/db/prod#host, kv/db/prod#password, kv/app/config#jwt_secret, kv/db/prod#port]
-```
-
-Template reference syntax:
+1. `kpm env` fetches secrets from AgentKMS over mTLS
+2. Encrypts each value with a session key (AES-256-GCM)
+3. Starts a background decrypt listener on a Unix domain socket
+4. Outputs ciphertext blobs + the socket path
 
 ```bash
-# KV secret — specific key
+eval $(kpm env --from ~/.kpm/templates/shell-env.template --output shell)
+```
+
+Now your shell has:
+```
+ANTHROPIC_API_KEY=ENC[kpm:s1a2b3:EncryptedBlobHere...]
+KPM_SESSION=s1a2b3
+KPM_DECRYPT_SOCK=/tmp/kpm-s1a2b3.sock
+```
+
+An attacker who dumps your process memory or runs `ps eww` sees ciphertext. Useless.
+
+### JIT decrypt
+
+When a tool needs the real value:
+
+```bash
+kpm run -- your-app
+```
+
+KPM decrypts all `ENC[kpm:...]` blobs for the child process, then destroys the plaintext when it exits.
+
+### Inspect safely
+
+```bash
+$ kpm show
+
+KPM Session: s1a2b3 (TTL: 58m32s remaining)
+
+  ANTHROPIC_API_KEY         encrypted
+  OPENAI_API_KEY            encrypted
+  GITHUB_TOKEN              encrypted
+
+3 secrets managed
+```
+
+No values shown. Ever.
+
+---
+
+## Three Security Levels
+
+| | Plaintext (`--plaintext`) | Secure (default) | Strict (`--strict`) |
+|---|---|---|---|
+| Secrets in env | Plaintext | Ciphertext | Ciphertext |
+| Key material on client | Secret values (brief) | Session key (TTL) | None |
+| Network at use time | No | No | Yes (every decrypt) |
+| Server-side revocation | No | No (until TTL) | Yes, immediate |
+| Per-access audit | No | No | Yes |
+| Best for | Trusted dev machine | CI/CD, general use | Production, compliance |
+
+---
+
+## Templates
+
+Templates replace `.env` files. They live in git. Secrets are references, not values.
+
+```bash
+# .env.template — safe to commit
+APP_NAME=my-service
 DB_PASSWORD=${kms:kv/db/prod#password}
-
-# LLM API key
-ANTHROPIC_API_KEY=${kms:llm/anthropic}
-
-# With fallback default
+ANTHROPIC_API_KEY=${kms:anthropic/api-key}
 PORT=${kms:kv/app/config#port:-8080}
 ```
 
+### Template hierarchy
+
+Three levels, project overrides user overrides enterprise:
+
+```bash
+$ kpm tree
+
+Enterprise: /etc/catalyst9/.kpm/templates
+  vpn-config.template       2 secrets [kv/vpn/corp#cert, kv/vpn/corp#key]
+
+User: ~/.kpm/templates
+  shell-env.template        3 secrets [anthropic/api-key, openai/api-key, github/token]
+
+Project: ./.kpm/templates
+  .env.template             4 secrets [kv/db/prod#password, kv/db/prod#host, ...]
+```
+
+### Reference syntax
+
+```bash
+${kms:service/name}              # Registry secret (primary value)
+${kms:service/name#field}        # Multi-field secret (specific field)
+${kms:llm/anthropic}             # LLM provider credential
+${kms:kv/db/prod#password}       # KV store with key selector
+${kms:kv/app/config#port:-8080}  # With fallback default
+```
+
 ---
 
-## Commands
+## Shell Integration
+
+Add to `~/.zshrc` or `~/.bashrc`:
+
+```bash
+eval $(kpm env --from ~/.kpm/templates/shell-env.template --output shell 2>/dev/null)
+```
+
+Your shell loads ciphertext on startup. Use `kpm run` to decrypt for any tool:
+
+```bash
+kpm run -- codex "fix the bug"
+kpm run -- ssh deploy@prod
+kpm run -- terraform apply
+```
+
+---
+
+## All Commands
 
 | Command | Description |
 |---------|-------------|
-| `kpm quickstart` | Set up local dev environment (PKI, dev server, demo secrets, templates) |
-| `kpm env --from <template>` | Resolve template and print env vars (secure by default) |
-| `kpm env --from <template> --plaintext` | Resolve template with plaintext output |
-| `kpm env --from <template> --output shell` | Shell export format for `eval $()` |
-| `kpm run -- <cmd> [args]` | Resolve template and run command with injected env |
-| `kpm get <ref>` | Fetch a single secret by KMS reference |
-| `kpm decrypt <blob>` | JIT decrypt a ciphertext blob (must be inside `kpm run`) |
-| `kpm show [VAR]` | Show managed secrets in current environment |
-| `kpm tree` | Show template hierarchy and what each template manages |
+| `kpm quickstart` | Set up local dev environment (PKI + server + secrets + templates) |
+| `kpm add <service/name>` | Store a secret (interactive, pipe, or `--from-file`) |
+| `kpm list [service]` | List secrets (metadata only). `--tag`, `--json`, `--include-deleted` |
+| `kpm describe <service/name>` | Show secret metadata (never values) |
+| `kpm history <service/name>` | Version timeline (never values) |
+| `kpm get <service/name>` | Retrieve a secret value |
+| `kpm remove <service/name>` | Soft-delete (`--purge` for hard delete) |
+| `kpm env --from <template>` | Resolve template (secure by default, `--plaintext` to opt out) |
+| `kpm run -- <cmd> [args]` | Run command with decrypted secrets |
+| `kpm show [VAR]` | Inspect managed secrets in current env |
+| `kpm tree` | Show template hierarchy |
+| `kpm decrypt <blob>` | JIT decrypt a single blob (inside `kpm run` context) |
 | `kpm init` | Write `~/.kpm/config.yaml` |
-| `kpm version` | Print version |
 
-**Global flags:**
+**Examples:**
 
-```
---config <path>   Config file (default: ~/.kpm/config.yaml)
---server <url>    AgentKMS server URL (overrides config)
---cert <path>     mTLS client cert
---key <path>      mTLS client key
---ca <path>       CA cert for AgentKMS
---verbose         Debug output (never prints secret values)
+```bash
+kpm add cloudflare/dns-token                    # interactive (masked input)
+echo "sk-xxx" | kpm add anthropic/api-key       # from pipe
+kpm add ssh/key --from-file ~/.ssh/id_ed25519   # from file
+kpm list --tag production                       # filter by tag
+kpm list --json | jq '.[] | .service'           # scripting
+eval $(kpm env --from template --output shell)  # load into shell
+kpm run -- your-app                             # decrypt for one process
 ```
 
 ---
@@ -175,47 +294,47 @@ PORT=${kms:kv/app/config#port:-8080}
 ## Architecture
 
 ```
-.env.template (committed to git)
-       |
-       v
-   kpm env / kpm run
-       |
-       | mTLS
-       v
-  AgentKMS Server ──> secret backends (dev, OpenBao, enterprise vaults)
-       |
-       v
-  AES-256-GCM session key
-       |
-       v
-  ENC[kpm:...] blobs in environment
-       |
-       | Unix domain socket (local only, permission-locked)
-       v
-  JIT decrypt at moment of use
+  kpm add / kpm env / kpm run
+          |
+          | mTLS (mutual TLS)
+          v
+    AgentKMS Server
+          |
+          v
+    Secret Backends (dev encrypted file, OpenBao, enterprise vaults)
+          |
+          v
+    AES-256-GCM session encryption
+          |
+          v
+    ENC[kpm:...] ciphertext in environment
+          |
+          | Unix domain socket (local only, 0600 permissions)
+          v
+    JIT decrypt at moment of use
 ```
 
-KPM is a local client. It never stores secrets. AgentKMS is the source of truth — it handles mTLS authentication, policy, audit logs, and short-lived credential vending.
-
-For production deployments, see the [AgentKMS repository](https://github.com/TheGenXCoder/agentkms).
+KPM is the local client. [AgentKMS](https://github.com/TheGenXCoder/agentkms) is the server. In dev mode, `kpm quickstart` runs both. In production, AgentKMS runs on your infrastructure with OpenBao or enterprise vault backends.
 
 ---
 
-## Security Model
+## Security
 
-- **`[]byte` everywhere** — secrets are never held as `string` until the absolute last write
-- **Aggressive zeroing** — memory is explicitly cleared after use; Go GC is not relied on
-- **AES-256-GCM session encryption** — each session uses a fresh random 256-bit key
-- **Unix domain socket** — JIT decrypt runs over a local-only socket with `0600` permissions; no network exposure
-- **Session key isolation** — the session key lives only in the background listener process; the child process sees only ciphertext
-- **mTLS for all server communication** — mutual TLS authentication on every AgentKMS request
-- **No secrets in logs** — `--verbose` prints paths, timings, and flow; never values or ciphertext blobs
+- Secrets never human-readable in commands, arguments, logs, or output
+- `[]byte` everywhere for secret values — never `string` until final write
+- Aggressive manual zeroing after use (not reliant on Go GC)
+- AES-256-GCM with fresh random session keys
+- Unix domain socket for JIT decrypt (local only, permission-locked, dies with process)
+- mTLS on every server request
+- Every write audited with caller identity, operation, timestamp — never the value
+- Policy-checked at the server: who can read/write/delete which paths
+- Separated storage: metadata and values in different KV paths — list endpoints physically cannot return values
 
 ---
 
 ## Configuration
 
-`~/.kpm/config.yaml` (generated by `kpm init` or `kpm quickstart`):
+`~/.kpm/config.yaml`:
 
 ```yaml
 server: https://agentkms.local:8443
@@ -223,23 +342,37 @@ cert: ~/.kpm/certs/client.crt
 key: ~/.kpm/certs/client.key
 ca: ~/.kpm/certs/ca.crt
 default_template: .env.template
-session_key_ttl: 300
+session_key_ttl: 3600
 ```
 
-All flag values override config file values.
+All CLI flags override config values. `~` is expanded automatically.
 
 ---
 
-## Shell Integration
-
-Add to `~/.zshrc` or `~/.bashrc` to load secrets into your shell on startup:
+## Testing
 
 ```bash
-eval $(kpm env --from ~/.kpm/templates/shell-env.template --output shell 2>/dev/null)
+# Automated (runs everything in a disposable Docker container)
+curl -sL https://raw.githubusercontent.com/TheGenXCoder/kpm/main/tests/run-tests.sh | bash
+
+# Manual (human-guided, 20 tests with checkboxes)
+# See: tests/MANUAL_TEST_GUIDE.md
 ```
+
+---
+
+## Roadmap
+
+- **v0.2.0** — Import scanner: `kpm import --scan ~/.config` finds secrets in your files, offers to secure them
+- **ABAC policy** — Time-based, network-based, and tag-based access rules
+- **Config profiles** — Stow-like config management with secrets, layered per machine/environment
+- **Release binaries** — No Go requirement for installation
+- **Split knowledge** — PCI-DSS dual-control: N-of-M authorization for sensitive secrets
 
 ---
 
 ## License
 
 Apache 2.0. See [LICENSE](LICENSE).
+
+Built by [@TheGenXCoder](https://github.com/TheGenXCoder). AgentKMS server at [TheGenXCoder/agentkms](https://github.com/TheGenXCoder/agentkms).
