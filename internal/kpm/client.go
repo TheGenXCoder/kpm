@@ -1,6 +1,7 @@
 package kpm
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -110,6 +111,35 @@ func (c *Client) doGet(ctx context.Context, url string) (*http.Response, error) 
 		return nil, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	return c.httpClient.Do(req)
+}
+
+func (c *Client) doPost(ctx context.Context, url string, body any) (*http.Response, error) {
+	if err := c.ensureAuth(ctx); err != nil {
+		return nil, err
+	}
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(body); err != nil {
+		return nil, fmt.Errorf("encode body: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, &buf)
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/json")
+	return c.httpClient.Do(req)
+}
+
+func (c *Client) doDelete(ctx context.Context, url string) (*http.Response, error) {
+	if err := c.ensureAuth(ctx); err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}

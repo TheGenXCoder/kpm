@@ -21,6 +21,11 @@ const usage = `kpm — secure secrets CLI backed by AgentKMS
 
 Usage:
   kpm quickstart                  Set up local dev environment (no server needed)
+  kpm add <service/name>          Store a secret in AgentKMS
+  kpm list [service]              List secrets in registry
+  kpm describe <service/name>     Show secret metadata (never values)
+  kpm history <service/name>      Show version history
+  kpm remove <service/name>       Remove a secret
   kpm env [flags]                 Resolve template (secure by default)
   kpm run [flags] -- <cmd> [args] Resolve template and run command with env
   kpm get <ref>                   Fetch a single secret
@@ -65,6 +70,16 @@ func main() {
 	strictFlag := fs.Bool("strict", false, "enable strict ciphertext mode")
 	envFlag := fs.String("env", "", "read ciphertext from this env var name")
 
+	fromFileFlag := fs.String("from-file", "", "read secret value from file")
+	descFlag := fs.String("description", "", "secret description")
+	tagsFlag := fs.String("tags", "", "comma-separated tags")
+	typeFlag := fs.String("type", "", "secret type (auto-detected if omitted)")
+	expiresFlag := fs.String("expires", "", "expiry date (ISO-8601)")
+	tagFilterFlag := fs.String("tag", "", "filter by tag")
+	typeFilterFlag := fs.String("type-filter", "", "filter by secret type")
+	includeDeletedFlag := fs.Bool("include-deleted", false, "include soft-deleted secrets")
+	purgeFlag := fs.Bool("purge", false, "permanently delete (no recovery)")
+
 	switch subcmd {
 	case "version":
 		fmt.Println("kpm", version)
@@ -100,7 +115,8 @@ func main() {
 		// Hidden internal command — started by kpm env to run a persistent listener.
 		runListen()
 		return
-	case "env", "export", "run", "get", "init", "decrypt", "config":
+	case "env", "export", "run", "get", "init", "decrypt", "config",
+		"add", "list", "describe", "history", "remove":
 		if err := fs.Parse(os.Args[2:]); err != nil {
 			os.Exit(1)
 		}
@@ -215,6 +231,77 @@ func main() {
 			os.Exit(1)
 		}
 		runDecrypt(blob)
+
+	case "add":
+		args := fs.Args()
+		if len(args) == 0 {
+			fmt.Fprintln(os.Stderr, "kpm add: path required (e.g. kpm add cloudflare/dns-token)")
+			os.Exit(1)
+		}
+		client := buildClient(cfg)
+		var tags []string
+		if *tagsFlag != "" {
+			tags = strings.Split(*tagsFlag, ",")
+		}
+		opts := kpm.AddOptions{
+			Path:        args[0],
+			FromFile:    *fromFileFlag,
+			Description: *descFlag,
+			Tags:        tags,
+			Type:        *typeFlag,
+			Expires:     *expiresFlag,
+		}
+		if err := kpm.RunAdd(ctx, os.Stderr, client, opts); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+
+	case "list":
+		service := ""
+		if args := fs.Args(); len(args) > 0 {
+			service = args[0]
+		}
+		client := buildClient(cfg)
+		if err := kpm.RunList(ctx, os.Stdout, client, service, *tagFilterFlag, *typeFilterFlag, *includeDeletedFlag); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+
+	case "describe":
+		args := fs.Args()
+		if len(args) == 0 {
+			fmt.Fprintln(os.Stderr, "kpm describe: path required")
+			os.Exit(1)
+		}
+		client := buildClient(cfg)
+		if err := kpm.RunDescribe(ctx, os.Stdout, client, args[0]); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+
+	case "history":
+		args := fs.Args()
+		if len(args) == 0 {
+			fmt.Fprintln(os.Stderr, "kpm history: path required")
+			os.Exit(1)
+		}
+		client := buildClient(cfg)
+		if err := kpm.RunHistory(ctx, os.Stdout, client, args[0]); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+
+	case "remove":
+		args := fs.Args()
+		if len(args) == 0 {
+			fmt.Fprintln(os.Stderr, "kpm remove: path required")
+			os.Exit(1)
+		}
+		client := buildClient(cfg)
+		if err := kpm.RunRemove(ctx, os.Stderr, client, args[0], *purgeFlag); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
 	}
 }
 
