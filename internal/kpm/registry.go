@@ -47,7 +47,7 @@ func (c *Client) WriteSecret(ctx context.Context, path string, value []byte) (*W
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		return nil, fmt.Errorf("server returned %d for POST /secrets/%s", resp.StatusCode, path)
 	}
 
@@ -68,7 +68,7 @@ func (c *Client) WriteSecretFields(ctx context.Context, path string, fields map[
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		return nil, fmt.Errorf("server returned %d for POST /secrets/%s", resp.StatusCode, path)
 	}
 
@@ -102,7 +102,7 @@ func (c *Client) WriteMetadata(ctx context.Context, path, desc string, tags []st
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		return fmt.Errorf("server returned %d", resp.StatusCode)
 	}
 	return nil
@@ -171,7 +171,7 @@ func (c *Client) DeleteSecret(ctx context.Context, path string, purge bool) erro
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		return fmt.Errorf("server returned %d", resp.StatusCode)
 	}
 	return nil
