@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 )
 
 // SecretMetadata is metadata for a secret (never contains values).
 type SecretMetadata struct {
-	Service     string   `json:"service"`
-	Name        string   `json:"name"`
+	Path        string   `json:"path,omitempty"`
+	Service     string   `json:"service,omitempty"`
+	Name        string   `json:"name,omitempty"`
 	Description string   `json:"description,omitempty"`
 	Tags        []string `json:"tags,omitempty"`
 	Type        string   `json:"type,omitempty"`
@@ -19,6 +21,24 @@ type SecretMetadata struct {
 	Expires     string   `json:"expires,omitempty"`
 	Version     int      `json:"version"`
 	Deleted     bool     `json:"deleted"`
+}
+
+// populateServiceName splits the Path field (e.g. "cloudflare/dns-token") into
+// Service and Name. If Service/Name are already set they are left unchanged.
+func (m *SecretMetadata) populateServiceName() {
+	if m.Service != "" || m.Name != "" {
+		return
+	}
+	if m.Path == "" {
+		return
+	}
+	idx := strings.Index(m.Path, "/")
+	if idx < 0 {
+		m.Service = m.Path
+		return
+	}
+	m.Service = m.Path[:idx]
+	m.Name = m.Path[idx+1:]
 }
 
 // VersionEntry is one version in a secret's history.
@@ -131,6 +151,9 @@ func (c *Client) ListMetadata(ctx context.Context, includeDeleted bool) ([]Secre
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		return nil, fmt.Errorf("decode: %w", err)
 	}
+	for i := range body.Secrets {
+		body.Secrets[i].populateServiceName()
+	}
 	return body.Secrets, nil
 }
 
@@ -155,6 +178,7 @@ func (c *Client) GetMetadata(ctx context.Context, path string) (*SecretMetadata,
 	if err := json.NewDecoder(resp.Body).Decode(&meta); err != nil {
 		return nil, fmt.Errorf("decode: %w", err)
 	}
+	meta.populateServiceName()
 	return &meta, nil
 }
 

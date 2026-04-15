@@ -613,13 +613,27 @@ func runRun(ctx context.Context, cfg *kpm.Config, tmplPath string, cmdArgs []str
 }
 
 func runGet(ctx context.Context, cfg *kpm.Config, ref string, verbose bool) {
+	client := buildClient(cfg)
+
 	parsed, ok := kpm.ParseKMSRef("${kms:" + ref + "}")
 	if !ok {
-		fmt.Fprintf(os.Stderr, "invalid reference: %s\nFormat: kv/path#key or llm/provider\n", ref)
-		os.Exit(1)
+		// Not a kms:// ref — try as a registry path (e.g. "cloudflare/dns-token").
+		secrets, err := client.FetchRegistrySecret(ctx, ref)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			fmt.Fprintf(os.Stderr, "tip: use kv/<path>#<key> for KV refs or llm/<provider> for LLM credentials\n")
+			os.Exit(1)
+		}
+		defer kpm.ZeroMap(secrets)
+		if val, ok := secrets["value"]; ok {
+			os.Stdout.Write(val)
+		} else {
+			for k, v := range secrets {
+				fmt.Fprintf(os.Stdout, "%s=%s\n", k, v)
+			}
+		}
+		return
 	}
-
-	client := buildClient(cfg)
 
 	switch parsed.Type {
 	case "llm":
@@ -653,8 +667,20 @@ func runGet(ctx context.Context, cfg *kpm.Config, ref string, verbose bool) {
 		}
 
 	default:
-		fmt.Fprintf(os.Stderr, "unknown ref type: %s\n", parsed.Type)
-		os.Exit(1)
+		// Unknown kms: type — also fall back to registry path.
+		secrets, err := client.FetchRegistrySecret(ctx, ref)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "unknown ref type %q and registry fetch failed: %v\n", parsed.Type, err)
+			os.Exit(1)
+		}
+		defer kpm.ZeroMap(secrets)
+		if val, ok := secrets["value"]; ok {
+			os.Stdout.Write(val)
+		} else {
+			for k, v := range secrets {
+				fmt.Fprintf(os.Stdout, "%s=%s\n", k, v)
+			}
+		}
 	}
 }
 

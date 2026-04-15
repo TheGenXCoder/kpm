@@ -179,6 +179,42 @@ func (c *Client) FetchLLM(ctx context.Context, provider string) (*LLMCredential,
 	}, nil
 }
 
+// FetchRegistrySecret retrieves a secret stored via the KPM registry (POST /secrets/{path}).
+// It uses the credentials/generic vending endpoint which reads from the encrypted KV.
+func (c *Client) FetchRegistrySecret(ctx context.Context, path string) (map[string][]byte, error) {
+	return c.fetchGenericSecrets(ctx, path)
+}
+
+func (c *Client) fetchGenericSecrets(ctx context.Context, path string) (map[string][]byte, error) {
+	url := c.baseURL + "/credentials/generic/" + path
+
+	resp, err := c.doGet(ctx, url)
+	if err != nil {
+		return nil, fmt.Errorf("fetch registry secret: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("secret not found: %s", path)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("server returned %d for %s", resp.StatusCode, path)
+	}
+
+	var body struct {
+		Secrets map[string]string `json:"secrets"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+
+	out := make(map[string][]byte, len(body.Secrets))
+	for k, v := range body.Secrets {
+		out[k] = []byte(v)
+	}
+	return out, nil
+}
+
 // FetchGeneric retrieves a generic credential set at the given path.
 func (c *Client) FetchGeneric(ctx context.Context, path string) (*GenericCredential, error) {
 	url := c.baseURL + "/credentials/generic/" + path

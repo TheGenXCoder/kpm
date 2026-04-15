@@ -83,9 +83,12 @@ func RunAdd(ctx context.Context, w io.Writer, client *Client, opts AddOptions) e
 		return fmt.Errorf("store secret: %w", err)
 	}
 
-	// Write metadata
-	if opts.Description != "" || opts.Tags != nil || secretType != "generic" || opts.Expires != "" {
-		_ = client.WriteMetadata(ctx, opts.Path, opts.Description, opts.Tags, secretType, opts.Expires)
+	// Write metadata whenever any field is set, or when the type is explicit
+	// (even if it matches the server default of "generic").
+	if opts.Description != "" || opts.Tags != nil || opts.Type != "" || secretType != "generic" || opts.Expires != "" {
+		if err := client.WriteMetadata(ctx, opts.Path, opts.Description, opts.Tags, secretType, opts.Expires); err != nil {
+			fmt.Fprintf(w, "warning: metadata not saved: %v\n", err)
+		}
 	}
 
 	tagStr := ""
