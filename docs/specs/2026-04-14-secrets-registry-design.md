@@ -1,8 +1,9 @@
-# KPM Secrets Registry — Design Spec
+# KPM Secrets Registry — Design Spec (v2)
 
 **Date:** 2026-04-14
+**Revised:** 2026-04-14 (incorporated Grok review feedback)
 **Status:** Approved for implementation
-**Scope:** First build — `kpm add`, `kpm list`, `kpm remove`, AgentKMS write endpoint
+**Scope:** First public release — registry, scanner, separated data model, versioning
 
 ---
 
@@ -12,7 +13,7 @@ Developers store secrets in dozens of places — .env files, Obsidian notes, App
 
 ## Solution
 
-A secrets registry that organizes secrets by service, makes them discoverable via `kpm list`, and ensures every write is audited and policy-checked through AgentKMS.
+A secrets registry that organizes secrets by service, makes them discoverable via `kpm list`, and ensures every write is audited and policy-checked through AgentKMS. Combined with an interactive import scanner that finds secrets scattered across your filesystem and brings them into one place.
 
 ## Design Principles
 
@@ -21,14 +22,32 @@ A secrets registry that organizes secrets by service, makes them discoverable vi
 3. **`service/name` is the only required structure** — tags, description, expiry are optional
 4. **ABAC policy model** — attributes on identity (cert) and policy (server config), not on secrets
 5. **KPM is the client, AgentKMS is the engine** — KPM is the funnel, AgentKMS is the product
+6. **Metadata is separated from secret values** — list/describe never touches the secrets store
+7. **Secrets are versioned** — every write creates a new version, previous versions retained for audit
 
 ---
 
 ## Data Model
 
+### Separated Storage (Grok review: don't mix metadata with values)
+
+Two parallel KV paths in AgentKMS:
+
+```
+kv/secrets/{service}/{name}     → the actual secret value(s)
+kv/metadata/{service}/{name}    → description, tags, type, timestamps, version info
+```
+
+**Why separate:**
+- List endpoint queries metadata store only — zero risk of value leakage
+- Multi-field secrets stay clean (no underscore prefix conventions)
+- Versioning is natural — metadata tracks version count, secrets store holds current + history
+- Audit and policy evaluation don't need to load secret values
+- Different access controls possible (list metadata without read access to values)
+
 ### Secret Path
 
-`service/name` — maps to AgentKMS KV at `kv/generic/{service}/{name}`
+`service/name` — the user-facing identifier.
 
 Examples:
 - `cloudflare/dns-token`
@@ -37,33 +56,71 @@ Examples:
 - `db/postgres-prod`
 - `ssh/deploy-key`
 
-### Secret Metadata
+### Metadata Record
 
-Stored as fields alongside the secret value in the KV store:
+Stored at `kv/metadata/{service}/{name}`:
 
-| Field | Required | Purpose |
-|-------|----------|---------|
-| `_value` | Yes | The secret itself (never exposed in list/show) |
-| `_description` | No | Human-readable note ("DNS edit token for catalyst9.ai zone") |
-| `_tags` | No | Comma-separated tags ("ci,dns,production") |
-| `_created` | Auto | ISO-8601 timestamp |
-| `_updated` | Auto | ISO-8601 timestamp |
-| `_expires` | No | ISO-8601 expiry (informational — policy enforces access) |
-| `_type` | No | "api-token", "password", "certificate", "ssh-key", "connection-string" |
-
-Underscore prefix prevents collision with actual secret fields for multi-field secrets.
-
-### Multi-field Secrets
-
-Some secrets have multiple related values (e.g., AWS needs access_key + secret_key):
-
-```bash
-kpm add aws/prod
-  Access Key ID: ****
-  Secret Access Key: ****
+```json
+{
+  "service": "cloudflare",
+  "name": "dns-token",
+  "description": "DNS edit token for catalyst9.ai zone",
+  "tags": ["dns", "ci", "production"],
+  "type": "api-token",
+  "created": "2026-04-14T10:30:00Z",
+  "updated": "2026-04-14T15:00:00Z",
+  "expires": "2027-01-01T00:00:00Z",
+  "version": 3,
+  "versions": [
+    {"version": 1, "created": "2026-04-14T10:30:00Z", "caller": "bert"},
+    {"version": 2, "created": "2026-04-14T12:00:00Z", "caller": "bert"},
+    {"version": 3, "created": "2026-04-14T15:00:00Z", "caller": "bert"}
+  ]
+}
 ```
 
-Stored as `kv/generic/aws/prod` with fields `access_key_id` and `secret_access_key` (plus `_metadata` fields).
+### Secret Value Record
+
+Stored at `kv/secrets/{service}/{name}`:
+
+```json
+{
+  "value": "the-actual-secret"
+}
+```
+
+For multi-field secrets (e.g., AWS):
+
+```json
+{
+  "access_key_id": "AKIA...",
+  "secret_access_key": "wJalr..."
+}
+```
+
+### Secret Versioning
+
+Every `kpm add` to an existing path creates a new version:
+- Current value stored at `kv/secrets/{service}/{name}`
+- Previous version moved to `kv/secrets/{service}/{name}/v{N}`
+- Metadata `versions` array updated
+- Configurable retention: keep last N versions (default: 10)
+- Old versions are readable via `kpm get service/name --version 2` (audited)
+- `kpm history service/name` shows version timeline (metadata only, no values)
+
+### Secret Types
+
+Optional classification for display and validation:
+
+| Type | Description | Detected by scanner |
+|------|-------------|-------------------|
+| `api-token` | API key / bearer token | Prefix patterns (sk-, ghp_, AKIA, etc.) |
+| `password` | Password / passphrase | Key name patterns (password, passwd, secret) |
+| `certificate` | TLS/SSL cert or key | `-----BEGIN` header |
+| `ssh-key` | SSH private/public key | `-----BEGIN OPENSSH` or `ssh-rsa` |
+| `connection-string` | Database connection URL | `postgres://`, `mongodb://`, etc. |
+| `jwt` | JSON Web Token | `eyJ` prefix with period separators |
+| `generic` | Unclassified secret | Default |
 
 ---
 
@@ -92,9 +149,10 @@ kpm add cloudflare/dns-token --tags dns,ci --description "catalyst9.ai DNS" --ty
 
 **Behavior:**
 - Prompts for value with masked input (like ssh-keygen passphrase prompt)
-- Sends `POST /credentials/generic/{service}/{name}` to AgentKMS
+- Sends to AgentKMS: secret value to `POST /secrets/{path}`, metadata to `POST /metadata/{path}`
 - Confirms: `Stored cloudflare/dns-token (tagged: dns, ci)`
-- If secret already exists, prompts: `cloudflare/dns-token already exists. Overwrite? [y/N]`
+- If secret already exists: creates new version, prompts `cloudflare/dns-token exists (v2). Update to v3? [y/N]`
+- Auto-detects type from value format if `--type` not specified
 
 ### kpm list
 
@@ -105,15 +163,15 @@ Shows secrets by service. Never shows values.
 kpm list
 
 cloudflare/
-  dns-token          api-token   [dns, ci]        "catalyst9.ai DNS"
-  redirect-rules     api-token   [dns]
+  dns-token          api-token   [dns, ci]        "catalyst9.ai DNS"            v3
+  redirect-rules     api-token   [dns]                                          v1
 
 github/
-  personal-pat       api-token   [dev]
-  deploy-key         ssh-key     [ci, production]
+  personal-pat       api-token   [dev]                                          v2
+  deploy-key         ssh-key     [ci, production]  "deploy to prod servers"     v1
 
 anthropic/
-  api-key            api-token   [dev, ci]
+  api-key            api-token   [dev, ci]                                      v1  EXPIRES in 30d
 
 # Filter by service
 kpm list cloudflare
@@ -126,27 +184,28 @@ kpm list --type ssh-key
 ```
 
 **Behavior:**
-- Fetches secret listing from AgentKMS (needs a list endpoint or convention)
+- Queries metadata store only (GET /metadata) — never touches secrets
 - Groups by service (first path segment)
-- Shows: name, type, tags, description — never values
-- Indicates expired secrets if `_expires` is past
+- Shows: name, type, tags, description, version, expiry warnings
+- Indicates expired or soon-to-expire secrets
 
 ### kpm remove
 
-Revokes/deletes a secret.
+Soft-deletes a secret. Value retained for audit trail, marked as deleted in metadata.
 
 ```bash
 kpm remove cloudflare/dns-token
-  Remove cloudflare/dns-token? This cannot be undone. [y/N] y
+  Remove cloudflare/dns-token (v3)? Secret will be marked deleted. [y/N] y
   Removed cloudflare/dns-token
 ```
 
 **Behavior:**
-- Sends `DELETE /credentials/generic/{service}/{name}` to AgentKMS
-- Requires confirmation
-- Audited server-side
+- Marks metadata as `"deleted": true, "deleted_at": "...", "deleted_by": "bert"`
+- Secret value retained in versioned store for audit/compliance
+- `kpm list` no longer shows it (unless `--include-deleted`)
+- Hard delete available via `kpm remove --purge` (requires elevated policy)
 
-### kpm describe (future)
+### kpm describe
 
 Show metadata about a secret without revealing the value.
 
@@ -158,29 +217,132 @@ cloudflare/dns-token
   Tags:        dns, ci
   Description: catalyst9.ai DNS
   Created:     2026-04-14T10:30:00Z
-  Updated:     2026-04-14T10:30:00Z
+  Updated:     2026-04-14T15:00:00Z
   Expires:     2027-01-01T00:00:00Z
+  Version:     3 (3 versions retained)
   Access:      bert (unrestricted), ci-server (read-only)
+```
+
+### kpm history
+
+Show version history for a secret. Metadata only — never values.
+
+```bash
+kpm history cloudflare/dns-token
+
+cloudflare/dns-token — 3 versions
+
+  v3  2026-04-14T15:00:00Z  bert    (current)
+  v2  2026-04-14T12:00:00Z  bert    
+  v1  2026-04-14T10:30:00Z  bert    
+```
+
+### kpm import --scan
+
+Interactive scanner that finds secrets in existing files and brings them into KPM.
+
+```bash
+kpm import --scan ~/.config
+
+Scanning ~/.config/ ...
+
+Found 47 files, 12 potential secrets:
+
+  ~/.config/gh/hosts.yml
+    [x] oauth_token          → github/gh-cli-token          (api-token)
+
+  ~/.bashrc
+    [x] ANTHROPIC_API_KEY    → anthropic/api-key             (api-token)
+    [x] OPENAI_API_KEY       → openai/api-key                (api-token)
+    [ ] EDITOR=nvim          (not a secret — skipped)
+
+  ~/.config/myapp/config.yaml
+    [x] db_password          → myapp/db-password             (password)
+    [x] api_secret           → myapp/api-secret              (api-token)
+    [ ] log_level: info      (not a secret — skipped)
+
+  ~/.ssh/id_ed25519
+    [x] private key          → ssh/personal                  (ssh-key)
+
+Use arrow keys to select/deselect, Enter to confirm.
+
+Store 6 secrets in AgentKMS? [Y/n] y
+
+  Stored github/gh-cli-token (api-token)
+  Stored anthropic/api-key (api-token)
+  Stored openai/api-key (api-token)
+  Stored myapp/db-password (password)
+  Stored myapp/api-secret (api-token)
+  Stored ssh/personal (ssh-key)
+
+✓ 6 secrets imported to AgentKMS
+✓ 4 files can be converted to templates (run: kpm import --templatize)
+```
+
+**Detection patterns (priority order):**
+
+1. **API key prefixes:** `sk-`, `pk_`, `AKIA`, `ghp_`, `gho_`, `sg-`, `xoxb-`, `xoxp-`, `Bearer `, `token_`
+2. **Connection strings:** `postgres://`, `mongodb://`, `mysql://`, `redis://`, `amqp://` containing passwords
+3. **Private key headers:** `-----BEGIN OPENSSH PRIVATE KEY-----`, `-----BEGIN RSA PRIVATE KEY-----`, `-----BEGIN EC PRIVATE KEY-----`, `-----BEGIN PRIVATE KEY-----`
+4. **JWTs:** `eyJ` prefix with 2+ period separators, length > 40
+5. **Env var patterns:** `export VAR=value` or `VAR=value` where key name contains: password, secret, token, api_key, access_key, private_key, connection_string
+6. **High-entropy strings:** Base64 blobs > 20 chars, hex strings > 32 chars in config file contexts
+7. **AWS key pairs:** `AKIA[0-9A-Z]{16}` with nearby 40-char base64 string
+
+**Safety rules:**
+- Never auto-add anything — always interactive selection
+- `--dry-run` flag shows what would be found without prompting
+- Never transmit potential secrets until user explicitly confirms
+- Never modify source files (templatization is a separate opt-in step)
+- Chunk scanning for large directories (progress indicator)
+- Skip binary files, .git directories, node_modules, vendor
+
+### kpm import --templatize (follow-up to --scan)
+
+After importing secrets, optionally convert source files to templates:
+
+```bash
+kpm import --templatize ~/.bashrc
+
+Original:
+  export ANTHROPIC_API_KEY=sk-ant-oat01-xxx...
+
+Template:
+  export ANTHROPIC_API_KEY=${kms:anthropic/api-key}
+
+Write template to ~/.kpm/templates/bashrc.template? [Y/n] y
+✓ Template saved. Add to your .bashrc:
+  eval $(kpm env --from ~/.kpm/templates/bashrc.template --output shell)
 ```
 
 ---
 
 ## AgentKMS Changes
 
-### New endpoint: POST /credentials/generic/{path}
+### Storage paths
 
-Write a secret to the KV store. Mirrors the existing GET endpoint.
+```
+kv/secrets/{service}/{name}          → current secret value
+kv/secrets/{service}/{name}/v{N}     → versioned history
+kv/metadata/{service}/{name}         → metadata record (JSON)
+```
+
+### New endpoint: POST /secrets/{path}
+
+Write a secret value. Creates or updates.
 
 **Request:**
 ```json
 {
-  "secrets": {
-    "_value": "the-actual-secret",
-    "_description": "catalyst9.ai DNS edit token",
-    "_tags": "dns,ci",
-    "_type": "api-token",
-    "_created": "2026-04-14T10:30:00Z"
-  }
+  "value": "the-actual-secret"
+}
+```
+
+Or for multi-field:
+```json
+{
+  "access_key_id": "AKIA...",
+  "secret_access_key": "wJalr..."
 }
 ```
 
@@ -188,24 +350,43 @@ Write a secret to the KV store. Mirrors the existing GET endpoint.
 ```json
 {
   "path": "cloudflare/dns-token",
-  "status": "created",
-  "version": 1
+  "version": 3,
+  "status": "updated"
 }
 ```
 
 **Security:**
 - mTLS required
-- Policy check: caller must have `write` permission for this path
-- Audit event logged with operation=credential_write, path, caller — never the value
-- Rate limited (configurable)
+- Policy check: caller must have `write` operation for this path
+- Audit event: operation=secret_write, path, caller, version — never the value
+- Versioning: previous value moved to `kv/secrets/{path}/v{N-1}`
 
-### New endpoint: DELETE /credentials/generic/{path}
+### New endpoint: POST /metadata/{path}
 
-Delete a secret from the KV store.
+Write metadata for a secret.
 
-### New endpoint: GET /credentials/generic (list)
+**Request:**
+```json
+{
+  "description": "catalyst9.ai DNS edit token",
+  "tags": ["dns", "ci"],
+  "type": "api-token",
+  "expires": "2027-01-01T00:00:00Z"
+}
+```
 
-List all secret paths the caller has access to (metadata only, never values).
+**Response:**
+```json
+{
+  "path": "cloudflare/dns-token",
+  "version": 3,
+  "status": "updated"
+}
+```
+
+### New endpoint: GET /metadata (list)
+
+List all secret metadata the caller has access to. Never returns values.
 
 **Response:**
 ```json
@@ -216,15 +397,31 @@ List all secret paths the caller has access to (metadata only, never values).
       "type": "api-token",
       "tags": ["dns", "ci"],
       "description": "catalyst9.ai DNS",
-      "created": "2026-04-14T10:30:00Z"
+      "created": "2026-04-14T10:30:00Z",
+      "updated": "2026-04-14T15:00:00Z",
+      "version": 3,
+      "expired": false
     }
   ]
 }
 ```
 
+### New endpoint: GET /metadata/{path}
+
+Get metadata for a specific secret.
+
+### New endpoint: DELETE /secrets/{path}
+
+Soft-delete: marks metadata as deleted, retains versioned values.
+Hard-delete (`?purge=true`): removes everything. Requires elevated policy.
+
+### New endpoint: GET /secrets/{path}/history
+
+List version metadata (timestamps, callers). Never returns values.
+
 ---
 
-## ABAC Policy Model (designed now, basic implementation first)
+## ABAC Policy Model
 
 ### Attributes available at evaluation time
 
@@ -238,7 +435,7 @@ List all secret paths the caller has access to (metadata only, never values).
 | `operation` | read, write, list, delete | Yes |
 | `time` | Server wall clock | Next iteration |
 | `network` | Source IP/CIDR | Next iteration |
-| `secret_tags` | Tags on the secret | Next iteration |
+| `secret_tags` | Tags on the secret (from metadata) | Next iteration |
 | `session_age` | Time since token issued | Next iteration |
 
 ### Policy rule structure
@@ -273,11 +470,9 @@ rules:
     resources: ["*"]
 ```
 
-Evaluation: first match wins, explicit deny-all at bottom. Extends existing AgentKMS policy engine with more attributes.
-
 ### First implementation
 
-Basic allow/deny with: caller, team, role, machine, secret_path, operation. Sufficient for dev and small team use. ABAC attributes (time, network, tags) added in next iteration.
+Basic allow/deny with: caller, team, role, machine, secret_path, operation. The attributes already present in the mTLS cert identity. Full ABAC (time, network, tags) is explicitly v2 — documentation will state this clearly.
 
 ### Future: Split knowledge / dual control (PCI-DSS)
 
@@ -289,24 +484,25 @@ Secrets flagged with `split: true` require N of M authorized callers to authenti
 
 ### kpm add → kpm env/run flow
 
-1. `kpm add anthropic/api-key` — stores in AgentKMS
-2. Template references it: `ANTHROPIC_API_KEY=${kms:llm/anthropic}` (or `${kms:kv/anthropic/api-key#_value}`)
+1. `kpm add anthropic/api-key` — stores value at `kv/secrets/anthropic/api-key`, metadata at `kv/metadata/anthropic/api-key`
+2. Template references it: `ANTHROPIC_API_KEY=${kms:anthropic/api-key}`
 3. `kpm env --from template` — resolves from AgentKMS, encrypted by default
 4. `kpm run -- myapp` — decrypts at moment of use
 
-### Template reference mapping
+### Template reference shorthand
 
-The `kpm add` path `service/name` maps to AgentKMS KV at `kv/generic/{service}/{name}`. Template references:
+`${kms:service/name}` resolves the primary value (single-field: the value; multi-field: all fields).
+`${kms:service/name#field}` resolves a specific field from a multi-field secret.
 
-- `${kms:kv/cloudflare/dns-token#_value}` — explicit
-- `${kms:cloudflare/dns-token}` — shorthand (resolves `_value` field by default)
-
-The shorthand makes templates cleaner. The resolver treats a bare reference (no `#field`) as `#_value`.
+Resolver detects path type:
+- Starts with `llm/` → hits `GET /credentials/llm/{provider}` (existing endpoint)
+- Starts with `kv/` → hits `GET /credentials/generic/{path}` (existing endpoint)
+- Otherwise → hits `GET /secrets/{service}/{name}` (new endpoint, returns value only)
 
 ### kpm list → kpm tree relationship
 
-- `kpm list` — shows secrets in the registry (what's stored)
-- `kpm tree` — shows templates and what secrets they reference (what's used)
+- `kpm list` — shows secrets in the registry (what's stored in AgentKMS)
+- `kpm tree` — shows templates and what secrets they reference (what's configured locally)
 
 Both are views into the same system from different angles.
 
@@ -314,35 +510,58 @@ Both are views into the same system from different angles.
 
 ## Implementation order
 
-1. AgentKMS: `POST /credentials/generic/{path}` write endpoint (dev server)
-2. AgentKMS: `GET /credentials/generic` list endpoint (dev server)
-3. AgentKMS: `DELETE /credentials/generic/{path}` delete endpoint (dev server)
-4. KPM: `kpm add` with interactive, pipe, and file input
-5. KPM: `kpm list` with service and tag filtering
-6. KPM: `kpm remove` with confirmation
-7. KPM: Update template resolver to support `${kms:service/name}` shorthand
-8. Tests for all of the above
-9. Update quickstart to seed secrets using `kpm add` instead of `agentkms-dev secrets set`
+### Phase 1: Server foundation
+1. AgentKMS: Separated storage paths (secrets vs metadata)
+2. AgentKMS: `POST /secrets/{path}` write endpoint with versioning
+3. AgentKMS: `POST /metadata/{path}` write endpoint
+4. AgentKMS: `GET /metadata` list endpoint
+5. AgentKMS: `GET /metadata/{path}` describe endpoint
+6. AgentKMS: `DELETE /secrets/{path}` soft-delete endpoint
+7. AgentKMS: `GET /secrets/{path}/history` version history endpoint
+
+### Phase 2: Registry CLI
+8. KPM: `kpm add` with interactive (masked), pipe, and file input
+9. KPM: `kpm list` with service, tag, and type filtering
+10. KPM: `kpm describe` metadata display
+11. KPM: `kpm history` version timeline
+12. KPM: `kpm remove` with confirmation + soft-delete
+13. KPM: Auto-detect secret type from value format
+14. KPM: Update template resolver for `${kms:service/name}` shorthand
+
+### Phase 3: Import scanner
+15. KPM: Secret detection engine (pattern matching)
+16. KPM: `kpm import --scan` interactive file scanner
+17. KPM: `kpm import --dry-run` preview mode
+18. KPM: `kpm import --templatize` source file conversion
+
+### Phase 4: Polish
+19. Update `kpm quickstart` to use `kpm add` for seeding
+20. Tests for all of the above
+21. Update README, demo scripts, demo containers
+22. Blog post drafts
 
 ---
 
 ## Blog post series outline
 
-### Part 1: "Your secrets are everywhere. Here's one place for all of them."
-- The scattered secrets problem (real examples)
+### Part 1: "I had 47 places I stored secrets. Then I built this."
+- Personal story — the scattered secrets reality
 - Install KPM + quickstart
 - `kpm add`, `kpm list` — get organized
+- `kpm import --scan` — find what you've been leaking
 - `kpm env` + `kpm run` — use them securely
+- CTA: try it, give feedback
 
 ### Part 2: "Your .env files are a liability."
 - Templates replace .env files
 - Ciphertext by default, JIT decrypt
 - `kpm show` — safe inspection
-- mock-codex demo (ciphertext → decrypted)
+- mock-codex demo (ciphertext → decrypted for the tool)
+- Two-container demo (push configs, pull on new machine)
 
 ### Part 3: "One config across all your machines."
-- Config profiles
-- `kpm import --scan` (interactive migration)
+- Config profiles (stow-like, but with secrets)
+- `kpm import --templatize` — convert existing configs
 - Push/pull across machines
 - The CISO pitch: revoke access, configs evaporate
 
@@ -350,4 +569,5 @@ Both are views into the same system from different angles.
 - `kpm run --secure` for agentic workloads
 - Process-scoped secrets (PID-tree, delegated sessions)
 - Per-agent audit trails
-- The regulated industry story
+- ABAC policy for regulated industries
+- The enterprise story
