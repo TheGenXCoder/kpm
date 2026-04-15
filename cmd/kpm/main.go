@@ -243,10 +243,58 @@ func main() {
 		runDecrypt(blob)
 
 	case "add":
-		args := fs.Args()
+		// Re-parse remaining args to handle flags after positional arg.
+		// Go's flag package stops at the first non-flag arg, so
+		// "kpm add cloudflare/dns-token --type api-token" leaves --type unparsed.
+		addFs := flag.NewFlagSet("add", flag.ContinueOnError)
+		addFromFile := addFs.String("from-file", "", "read secret value from file")
+		addDesc := addFs.String("description", "", "secret description")
+		addTags := addFs.String("tags", "", "comma-separated tags")
+		addType := addFs.String("type", "", "secret type")
+		addExpires := addFs.String("expires", "", "expiry date")
+		addService := addFs.String("service", "", "service name")
+		addName := addFs.String("name", "", "secret name")
+
+		// Collect positional args and flags from remaining args
+		var positional []string
+		remaining := fs.Args()
+		for len(remaining) > 0 {
+			if remaining[0] == "--" {
+				remaining = remaining[1:]
+				break
+			}
+			if strings.HasPrefix(remaining[0], "-") {
+				break
+			}
+			positional = append(positional, remaining[0])
+			remaining = remaining[1:]
+		}
+		if len(remaining) > 0 {
+			addFs.Parse(remaining)
+		}
+
+		// Also inherit from the top-level flags if the add-specific ones weren't set
+		if *addFromFile == "" && *fromFileFlag != "" {
+			*addFromFile = *fromFileFlag
+		}
+		if *addDesc == "" && *descFlag != "" {
+			*addDesc = *descFlag
+		}
+		if *addTags == "" && *tagsFlag != "" {
+			*addTags = *tagsFlag
+		}
+		if *addType == "" && *typeFlag != "" {
+			*addType = *typeFlag
+		}
+		if *addExpires == "" && *expiresFlag != "" {
+			*addExpires = *expiresFlag
+		}
+
 		path := ""
-		if len(args) > 0 {
-			path = args[0]
+		if len(positional) > 0 {
+			path = positional[0]
+		} else if *addService != "" && *addName != "" {
+			path = *addService + "/" + *addName
 		} else if *serviceFlag != "" && *nameFlag != "" {
 			path = *serviceFlag + "/" + *nameFlag
 		}
@@ -257,16 +305,16 @@ func main() {
 		}
 		client := buildClient(cfg)
 		var tags []string
-		if *tagsFlag != "" {
-			tags = strings.Split(*tagsFlag, ",")
+		if *addTags != "" {
+			tags = strings.Split(*addTags, ",")
 		}
 		opts := kpm.AddOptions{
 			Path:        path,
-			FromFile:    *fromFileFlag,
-			Description: *descFlag,
+			FromFile:    *addFromFile,
+			Description: *addDesc,
 			Tags:        tags,
-			Type:        *typeFlag,
-			Expires:     *expiresFlag,
+			Type:        *addType,
+			Expires:     *addExpires,
 		}
 		if err := kpm.RunAdd(ctx, os.Stderr, client, opts); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
