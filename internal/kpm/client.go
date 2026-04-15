@@ -180,13 +180,9 @@ func (c *Client) FetchLLM(ctx context.Context, provider string) (*LLMCredential,
 }
 
 // FetchRegistrySecret retrieves a secret stored via the KPM registry (POST /secrets/{path}).
-// It uses the credentials/generic vending endpoint which reads from the encrypted KV.
+// Reads from the registry's /secrets/ endpoint (not /credentials/generic/).
 func (c *Client) FetchRegistrySecret(ctx context.Context, path string) (map[string][]byte, error) {
-	return c.fetchGenericSecrets(ctx, path)
-}
-
-func (c *Client) fetchGenericSecrets(ctx context.Context, path string) (map[string][]byte, error) {
-	url := c.baseURL + "/credentials/generic/" + path
+	url := c.baseURL + "/secrets/" + path
 
 	resp, err := c.doGet(ctx, url)
 	if err != nil {
@@ -201,15 +197,14 @@ func (c *Client) fetchGenericSecrets(ctx context.Context, path string) (map[stri
 		return nil, fmt.Errorf("server returned %d for %s", resp.StatusCode, path)
 	}
 
-	var body struct {
-		Secrets map[string]string `json:"secrets"`
-	}
+	// Server returns a flat map: {"value": "secret"} or {"field1": "val1", "field2": "val2"}
+	var body map[string]string
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
-	out := make(map[string][]byte, len(body.Secrets))
-	for k, v := range body.Secrets {
+	out := make(map[string][]byte, len(body))
+	for k, v := range body {
 		out[k] = []byte(v)
 	}
 	return out, nil
