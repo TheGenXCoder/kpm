@@ -43,6 +43,13 @@ Global flags:
   --key <path>      mTLS client key (overrides config)
   --ca <path>       CA cert for AgentKMS
   --verbose         Debug output (never prints secrets)
+
+Examples:
+  kpm add cloudflare/dns-token                    # store a secret (interactive)
+  echo "sk-xxx" | kpm add anthropic/api-key       # store from pipe
+  kpm list                                        # see all secrets
+  kpm list --tag ci                               # filter by tag
+  eval $(kpm env --from ~/.kpm/templates/shell-env.template --output shell)
 `
 
 var version = "dev"
@@ -79,6 +86,9 @@ func main() {
 	typeFilterFlag := fs.String("type-filter", "", "filter by secret type")
 	includeDeletedFlag := fs.Bool("include-deleted", false, "include soft-deleted secrets")
 	purgeFlag := fs.Bool("purge", false, "permanently delete (no recovery)")
+	jsonFlag := fs.Bool("json", false, "output JSON instead of table (list command)")
+	serviceFlag := fs.String("service", "", "service name (alternative to positional path)")
+	nameFlag := fs.String("name", "", "secret name (alternative to positional path)")
 
 	switch subcmd {
 	case "version":
@@ -234,8 +244,15 @@ func main() {
 
 	case "add":
 		args := fs.Args()
-		if len(args) == 0 {
+		path := ""
+		if len(args) > 0 {
+			path = args[0]
+		} else if *serviceFlag != "" && *nameFlag != "" {
+			path = *serviceFlag + "/" + *nameFlag
+		}
+		if path == "" {
 			fmt.Fprintln(os.Stderr, "kpm add: path required (e.g. kpm add cloudflare/dns-token)")
+			fmt.Fprintln(os.Stderr, "  or use: kpm add --service cloudflare --name dns-token")
 			os.Exit(1)
 		}
 		client := buildClient(cfg)
@@ -244,7 +261,7 @@ func main() {
 			tags = strings.Split(*tagsFlag, ",")
 		}
 		opts := kpm.AddOptions{
-			Path:        args[0],
+			Path:        path,
 			FromFile:    *fromFileFlag,
 			Description: *descFlag,
 			Tags:        tags,
@@ -262,7 +279,7 @@ func main() {
 			service = args[0]
 		}
 		client := buildClient(cfg)
-		if err := kpm.RunList(ctx, os.Stdout, client, service, *tagFilterFlag, *typeFilterFlag, *includeDeletedFlag); err != nil {
+		if err := kpm.RunList(ctx, os.Stdout, client, service, *tagFilterFlag, *typeFilterFlag, *includeDeletedFlag, *jsonFlag); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}

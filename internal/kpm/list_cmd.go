@@ -2,6 +2,7 @@ package kpm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"sort"
@@ -10,7 +11,7 @@ import (
 )
 
 // RunList displays secrets grouped by service.
-func RunList(ctx context.Context, w io.Writer, client *Client, service, tag, secretType string, includeDeleted bool) error {
+func RunList(ctx context.Context, w io.Writer, client *Client, service, tag, secretType string, includeDeleted bool, jsonOutput bool) error {
 	secrets, err := client.ListMetadata(ctx, includeDeleted)
 	if err != nil {
 		return err
@@ -39,6 +40,12 @@ func RunList(ctx context.Context, w io.Writer, client *Client, service, tag, sec
 	if len(filtered) == 0 {
 		fmt.Fprintln(w, "No secrets match the filter.")
 		return nil
+	}
+
+	if jsonOutput {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(filtered)
 	}
 
 	// Group by service
@@ -86,7 +93,7 @@ func RunList(ctx context.Context, w io.Writer, client *Client, service, tag, sec
 			if s.Deleted {
 				extra = "DELETED"
 			}
-			fmt.Fprintf(w, "  %-20s %-14s %-18s %-30s v%d %s\n", s.Name, tp, tagStr, desc, s.Version, extra)
+			fmt.Fprintf(w, "  %-28s %-14s %-18s %-30s v%d %s\n", s.Name, tp, tagStr, desc, s.Version, extra)
 		}
 		fmt.Fprintln(w)
 	}
