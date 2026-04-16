@@ -101,7 +101,41 @@ func Resolve(ctx context.Context, client *Client, entries []TemplateEntry) ([]Re
 			re.Source = "agentkms"
 
 		default:
-			return nil, fmt.Errorf("resolve %s: unknown ref type %q", e.EnvKey, e.Ref.Type)
+			// Registry path (service/name format, no llm/ or kv/ prefix).
+			// e.Ref.Type is the service, e.Ref.Path is the name.
+			registryPath := e.Ref.Type + "/" + e.Ref.Path
+			secrets, err := client.FetchRegistrySecret(ctx, registryPath)
+			if err != nil {
+				if e.Ref.Default != "" {
+					re.PlainValue = []byte(e.Ref.Default)
+					re.Source = "default"
+					resolved = append(resolved, re)
+					continue
+				}
+				return nil, fmt.Errorf("resolve %s: %w", e.EnvKey, err)
+			}
+
+			// If a specific field was requested via #key, use it
+			var val []byte
+			if e.Ref.Key != "" {
+				v, ok := secrets[e.Ref.Key]
+				if !ok {
+					ZeroMap(secrets)
+					return nil, fmt.Errorf("resolve %s: field %q not found at %q", e.EnvKey, e.Ref.Key, registryPath)
+				}
+				val = v
+			} else if v, ok := secrets["value"]; ok {
+				val = v
+			} else {
+				// No "value" field and no key specified — fail
+				ZeroMap(secrets)
+				return nil, fmt.Errorf("resolve %s: multi-field secret at %q, specify field with #key", e.EnvKey, registryPath)
+			}
+
+			re.PlainValue = make([]byte, len(val))
+			copy(re.PlainValue, val)
+			re.Source = "agentkms"
+			ZeroMap(secrets)
 		}
 
 		resolved = append(resolved, re)
