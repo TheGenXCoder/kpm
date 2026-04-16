@@ -1,0 +1,101 @@
+# =============================================================================
+# KPM CI Pipeline
+#
+# Triggers: push to any branch, pull requests to main.
+#
+# Jobs:
+#   quality    — go vet, go test -race, coverage threshold
+#   build      — cross-compile for linux/amd64, linux/arm64, darwin/amd64,
+#                darwin/arm64 (validates release-time build matrix)
+#
+# No secrets required; all checks operate on repo content only.
+# =============================================================================
+
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+env:
+  GO_VERSION: "1.25"
+  COVERAGE_MIN: "75"
+
+jobs:
+  # ── quality ───────────────────────────────────────────────────────────────────
+  quality:
+    name: Quality Gate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Verify module integrity
+        run: go mod verify
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: Tests with race detector
+        run: go test -race -count=1 -timeout=5m ./...
+
+      - name: Coverage check (internal/kpm)
+        run: |
+          # The security-critical package is internal/kpm (registry client,
+          # encrypt/decrypt, UDS listener, secret zeroing). Enforce a minimum
+          # coverage here — adversarial tests live in this package.
+          COV=$(go test -cover ./internal/kpm/ 2>&1 | grep -oE 'coverage: [0-9]+\.[0-9]+' | awk '{print $2}')
+          COV_INT=${COV%.*}
+          echo "internal/kpm coverage: ${COV}%"
+          if [ "${COV_INT}" -lt "${COVERAGE_MIN}" ]; then
+            echo "::error::Coverage ${COV}% is below minimum ${COVERAGE_MIN}%"
+            exit 1
+          fi
+
+  # ── build ─────────────────────────────────────────────────────────────────────
+  # Cross-compile the kpm binary for all supported release targets. Catches
+  # platform-specific build breakage (e.g., syscalls unavailable on darwin)
+  # before they show up at release time.
+  build:
+    name: Cross-compile (${{ matrix.os }}/${{ matrix.arch }})
+    runs-on: ubuntu-latest
+    needs: quality
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+          - os: linux
+            arch: arm64
+          - os: darwin
+            arch: amd64
+          - os: darwin
+            arch: arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: "0"
+        run: go build -v -o kpm-${{ matrix.os }}-${{ matrix.arch }} ./cmd/kpm/
