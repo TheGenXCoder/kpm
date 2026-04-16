@@ -1,5 +1,8 @@
 # kpm
 
+[![CI](https://github.com/TheGenXCoder/kpm/actions/workflows/ci.yml/badge.svg)](https://github.com/TheGenXCoder/kpm/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
+
 **Stop scattering secrets across your machine. One CLI to store, manage, and inject them — encrypted by default.**
 
 KPM is a secrets lifecycle tool. Add secrets from the command line. Organize them by service. Inject them into your environment as ciphertext that only decrypts at the moment your app needs it. Back it with [AgentKMS](https://github.com/TheGenXCoder/agentkms) in production, or run the built-in dev server locally.
@@ -241,6 +244,72 @@ ${kms:kv/app/config#port:-8080}  # With fallback default
 
 ---
 
+## Multi-Client / Multi-Project Workflow
+
+One template tree. Many contexts. Zero `.env` shuffling.
+
+KPM uses two mechanisms that compose to make context switching trivial:
+
+### Profiles walk up the directory tree
+
+Every directory can have a `.kpm/config.yaml`. KPM walks up from your cwd and merges every one it finds — child values override parent values.
+
+```
+~/clients/
+├── acme/
+│   └── .kpm/config.yaml           # customer: acme
+│       └── us-east/
+│           └── .kpm/config.yaml   # region: us-east
+│               └── project-alpha/
+│                   └── .kpm/config.yaml   # project: alpha, env: staging
+└── globex/
+    └── .kpm/config.yaml           # customer: globex
+```
+
+```bash
+$ cd ~/clients/acme/us-east/project-alpha
+$ kpm profile
+customer: acme           ← ~/clients/acme/.kpm/config.yaml
+region:   us-east        ← ~/clients/acme/us-east/.kpm/config.yaml
+project:  alpha          ← ~/clients/acme/us-east/project-alpha/.kpm/config.yaml
+env:      staging        ← ~/clients/acme/us-east/project-alpha/.kpm/config.yaml
+```
+
+Profiles are **plaintext metadata** — customer names, region codes, environment identifiers. Never secrets.
+
+### One template, every context
+
+Reference profile values in any template with `{{profile:key}}`:
+
+```bash
+# ~/.config/kpm/templates/claude.template
+ANTHROPIC_API_KEY=${kms:customers/{{profile:customer}}/anthropic-key}
+CLAUDE_MODEL={{profile:model:-claude-opus-4-6}}
+```
+
+In `~/clients/acme/...` this resolves to Acme's Anthropic key. In `~/clients/globex/...` it resolves to Globex's. Same command. Different secrets. No work.
+
+### Compose templates with includes
+
+```bash
+# ~/.config/kpm/templates/db-migrations.template
+${kms:include/customers/{{profile:customer}}/aws}
+${kms:include/customers/{{profile:customer}}/{{profile:env}}/db}
+MIGRATION_DIR=/app/migrations
+```
+
+Circular includes are detected. Include depth is bounded. Missing paths fail loudly.
+
+### Security design
+
+**Profiles walk up. Templates don't.**
+
+Templates control secret access, so walking would be a privilege-escalation vector — a parent directory could silently grant secret access to every project below it. Profiles only contain identifiers that shape paths; they can't add permissions.
+
+See [blog post Part 3](docs/blog/part-3-multi-client.md) for the full story.
+
+---
+
 ## Shell Integration
 
 Add to `~/.zshrc` or `~/.bashrc`:
@@ -368,6 +437,17 @@ curl -sL https://raw.githubusercontent.com/TheGenXCoder/kpm/main/tests/run-tests
 - **Config profiles** — Stow-like config management with secrets, layered per machine/environment
 - **Release binaries** — No Go requirement for installation
 - **Split knowledge** — PCI-DSS dual-control: N-of-M authorization for sensitive secrets
+
+---
+
+## Documentation
+
+- [**Part 1: I had 47 places I stored secrets**](docs/blog/part-1-scattered-secrets.md) — why KPM exists
+- [**Part 2: Your .env files are a liability**](docs/blog/part-2-env-files-liability.md) — ciphertext-by-default and JIT decrypt
+- [**Part 3: One template tree, twelve clients, zero friction**](docs/blog/part-3-multi-client.md) — profiles + includes
+- [**Part 4: AI coding agents make the secrets problem worse**](docs/blog/part-4-ai-agents.md) — process-scoped decryption for agentic workflows
+- [**SECURITY.md**](SECURITY.md) — threat model, defended vs not defended, disclosure policy
+- [**CONTRIBUTING.md**](CONTRIBUTING.md) — how to contribute, security-sensitive areas
 
 ---
 
