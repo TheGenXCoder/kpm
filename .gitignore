@@ -2,3 +2,4 @@
 agentkms-dev
 *.exe
 .kpm/
+cov.out
