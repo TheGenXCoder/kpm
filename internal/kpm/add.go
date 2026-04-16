@@ -19,6 +19,7 @@ type AddOptions struct {
 	Tags        []string
 	Type        string
 	Expires     string
+	Force       bool // skip confirmation prompt when overwriting
 }
 
 // RunAdd stores a secret in AgentKMS.
@@ -33,11 +34,19 @@ func RunAdd(ctx context.Context, w io.Writer, client *Client, opts AddOptions) e
 	// Check existing
 	existing, _ := client.GetMetadata(ctx, opts.Path)
 	if existing != nil && !existing.Deleted {
-		fmt.Fprintf(w, "%s exists (v%d). Update to v%d? [y/N] ", opts.Path, existing.Version, existing.Version+1)
-		reader := bufio.NewReader(os.Stdin)
-		answer, _ := reader.ReadString('\n')
-		if strings.TrimSpace(strings.ToLower(answer)) != "y" {
-			return fmt.Errorf("cancelled")
+		// Non-interactive input (pipe or --from-file) requires --force to overwrite
+		// to avoid stdin buffer conflicts between confirmation and value read.
+		nonInteractive := opts.FromFile != "" || !term.IsTerminal(int(os.Stdin.Fd()))
+		if nonInteractive && !opts.Force {
+			return fmt.Errorf("%s exists (v%d); use --force to overwrite when input is non-interactive", opts.Path, existing.Version)
+		}
+		if !nonInteractive {
+			fmt.Fprintf(w, "%s exists (v%d). Update to v%d? [y/N] ", opts.Path, existing.Version, existing.Version+1)
+			reader := bufio.NewReader(os.Stdin)
+			answer, _ := reader.ReadString('\n')
+			if strings.TrimSpace(strings.ToLower(answer)) != "y" {
+				return fmt.Errorf("cancelled")
+			}
 		}
 	}
 

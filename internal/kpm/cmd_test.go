@@ -182,46 +182,47 @@ func TestRunAddFromFileMissing(t *testing.T) {
 	}
 }
 
-func TestRunAddExistingConfirmedUpdate(t *testing.T) {
+func TestRunAddExistingNonInteractiveRequiresForce(t *testing.T) {
+	existing := &SecretMetadata{Path: "cloudflare/token", Service: "cloudflare", Name: "token", Version: 1}
+	httpClient, baseURL := mockServerForAdd(t, existing)
+	c := &Client{baseURL: baseURL, httpClient: httpClient}
+
+	dir := t.TempDir()
+	secretFile := dir + "/value.txt"
+	os.WriteFile(secretFile, []byte("new-value"), 0600)
+
+	var buf bytes.Buffer
+	err := RunAdd(context.Background(), &buf, c, AddOptions{
+		Path:     "cloudflare/token",
+		FromFile: secretFile,
+	})
+	if err == nil || !strings.Contains(err.Error(), "--force") {
+		t.Errorf("expected error requiring --force, got: %v", err)
+	}
+}
+
+func TestRunAddExistingWithForceOverwrites(t *testing.T) {
 	existing := &SecretMetadata{Path: "cloudflare/token", Service: "cloudflare", Name: "token", Version: 2}
 	httpClient, baseURL := mockServerForAdd(t, existing)
 	c := &Client{baseURL: baseURL, httpClient: httpClient}
 
-	// Write the value to a temp file to avoid the bufio stdin buffering issue:
-	// bufio.NewReader reads ahead from the pipe for the confirmation prompt,
-	// which then leaves nothing for io.ReadAll in the value-reading path.
 	dir := t.TempDir()
 	secretFile := dir + "/update-value.txt"
 	os.WriteFile(secretFile, []byte("updated-secret-value"), 0600)
 
 	var buf bytes.Buffer
-	stdinWith(t, "y\n", func() {
-		err := RunAdd(context.Background(), &buf, c, AddOptions{
-			Path:     "cloudflare/token",
-			FromFile: secretFile,
-		})
-		if err != nil {
-			t.Fatalf("RunAdd confirmed update: %v", err)
-		}
+	err := RunAdd(context.Background(), &buf, c, AddOptions{
+		Path:     "cloudflare/token",
+		FromFile: secretFile,
+		Force:    true,
 	})
+	if err != nil {
+		t.Fatalf("RunAdd with --force: %v", err)
+	}
 	out := buf.String()
 	if !strings.Contains(out, "cloudflare/token") {
 		t.Errorf("output missing path: %s", out)
 	}
-}
-
-func TestRunAddExistingCancelledUpdate(t *testing.T) {
-	existing := &SecretMetadata{Path: "cloudflare/token", Service: "cloudflare", Name: "token", Version: 1}
-	httpClient, baseURL := mockServerForAdd(t, existing)
-	c := &Client{baseURL: baseURL, httpClient: httpClient}
-
-	var buf bytes.Buffer
-	stdinWith(t, "n\n", func() {
-		err := RunAdd(context.Background(), &buf, c, AddOptions{Path: "cloudflare/token"})
-		if err == nil || !strings.Contains(err.Error(), "cancelled") {
-			t.Errorf("expected 'cancelled' error, got: %v", err)
-		}
-	})
 }
 
 // === RunList tests ===

@@ -288,6 +288,7 @@ func main() {
 		addExpires := addFs.String("expires", "", "expiry date")
 		addService := addFs.String("service", "", "service name")
 		addName := addFs.String("name", "", "secret name")
+		addForce := addFs.Bool("force", false, "overwrite existing secret without confirmation")
 
 		// Collect positional args and flags from remaining args
 		var positional []string
@@ -349,6 +350,7 @@ func main() {
 			Tags:        tags,
 			Type:        *addType,
 			Expires:     *addExpires,
+			Force:       *addForce,
 		}
 		if err := kpm.RunAdd(ctx, os.Stderr, client, opts); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
