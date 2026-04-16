@@ -1,10 +1,10 @@
 #!/bin/bash
 # KPM Quick Install
-# curl -sL https://raw.githubusercontent.com/TheGenXCoder/agentkms/main/scripts/install.sh | bash
+# curl -sL https://kpm.catalyst9.ai/install | bash
 #
 # Installs kpm (key-pair-manager) — the secure secrets CLI backed by AgentKMS.
-# Requires: git, go (1.21+)
-# Release binaries coming soon — this build-from-source step will be optional.
+# Prefers prebuilt release binaries (no Go required). Falls back to
+# building from source if the binary is unavailable or curl fails.
 #
 # kpm has ONE dependency (yaml.v3). No supply chain bloat.
 # The dev server (agentkms-dev) is built separately by `kpm quickstart` only if needed.
@@ -13,6 +13,7 @@ set -e
 
 REPO="https://github.com/TheGenXCoder/kpm.git"
 BRANCH="main"
+RELEASE_TAG="${KPM_RELEASE_TAG:-v0.1.0}"
 INSTALL_DIR="${KPM_INSTALL_DIR:-/usr/local/bin}"
 BUILD_DIR="$(mktemp -d)"
 
@@ -25,23 +26,53 @@ info()  { echo -e "${GREEN}==>${NC} $*"; }
 warn()  { echo -e "${YELLOW}==>${NC} $*"; }
 fail()  { echo -e "${RED}ERROR:${NC} $*" >&2; exit 1; }
 
-# ── Check dependencies ────────────────────────────────────────────────────────
+cleanup() { rm -rf "$BUILD_DIR"; }
+trap cleanup EXIT
 
-command -v git >/dev/null 2>&1 || fail "git is required. Install it first."
-command -v go  >/dev/null 2>&1 || fail "go is required (1.21+). Install from https://go.dev/dl/
-    Release binaries coming soon — this requirement will be optional."
+# ── Detect OS + arch ─────────────────────────────────────────────────────────
 
-GO_VERSION=$(go version | grep -oP 'go\K[0-9]+\.[0-9]+' || echo "0.0")
-info "Found go $GO_VERSION"
+OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+ARCH="$(uname -m)"
 
-# ── Build ─────────────────────────────────────────────────────────────────────
+case "$OS" in
+    linux|darwin) ;;
+    *) fail "Unsupported OS: $OS (supported: linux, darwin)" ;;
+esac
 
-info "Cloning kpm..."
-git clone --depth 1 --branch "$BRANCH" "$REPO" "$BUILD_DIR/src" 2>&1 | tail -1
+case "$ARCH" in
+    x86_64|amd64) ARCH="amd64" ;;
+    aarch64|arm64) ARCH="arm64" ;;
+    *) fail "Unsupported arch: $ARCH (supported: amd64, arm64)" ;;
+esac
 
-info "Building kpm (1 dependency: yaml.v3)..."
-cd "$BUILD_DIR/src"
-go build -o "$BUILD_DIR/kpm-bin" ./cmd/kpm/ 2>&1
+BINARY_URL="https://github.com/TheGenXCoder/kpm/releases/download/${RELEASE_TAG}/kpm-${OS}-${ARCH}"
+
+# ── Try prebuilt binary first ─────────────────────────────────────────────────
+
+info "Detected platform: ${OS}/${ARCH}"
+info "Attempting to download prebuilt binary (${RELEASE_TAG})..."
+
+if command -v curl >/dev/null 2>&1 && curl -fsSL -o "$BUILD_DIR/kpm-bin" "$BINARY_URL" 2>/dev/null; then
+    info "Prebuilt binary downloaded"
+    chmod +x "$BUILD_DIR/kpm-bin"
+    INSTALL_METHOD="prebuilt"
+else
+    warn "Prebuilt binary unavailable — falling back to source build"
+
+    command -v git >/dev/null 2>&1 || fail "git is required for source build. Install it first."
+    command -v go  >/dev/null 2>&1 || fail "go is required (1.21+) for source build. Install from https://go.dev/dl/"
+
+    GO_VERSION=$(go version 2>/dev/null | sed -n 's/.*go\([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p')
+    info "Found go ${GO_VERSION:-unknown}"
+
+    info "Cloning kpm..."
+    git clone --depth 1 --branch "$BRANCH" "$REPO" "$BUILD_DIR/src" 2>&1 | tail -1
+
+    info "Building kpm (1 dependency: yaml.v3)..."
+    cd "$BUILD_DIR/src"
+    go build -o "$BUILD_DIR/kpm-bin" ./cmd/kpm/ 2>&1
+    INSTALL_METHOD="source"
+fi
 
 # ── Install ───────────────────────────────────────────────────────────────────
 
@@ -54,14 +85,10 @@ fi
 
 chmod +x "$INSTALL_DIR/kpm"
 
-# ── Cleanup ───────────────────────────────────────────────────────────────────
-
-rm -rf "$BUILD_DIR"
-
 # ── Verify ────────────────────────────────────────────────────────────────────
 
 VERSION=$("$INSTALL_DIR/kpm" version 2>&1)
-info "Installed: $VERSION"
+info "Installed via ${INSTALL_METHOD}: $VERSION"
 echo ""
 
 # ── Next steps ────────────────────────────────────────────────────────────────
