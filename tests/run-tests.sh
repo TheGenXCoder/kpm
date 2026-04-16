@@ -242,11 +242,16 @@ echo "$OUTPUT" | grep -q "encrypted" && pass "T27: kpm show" || fail "T27: $OUTP
 OUTPUT=$(kpm run -- sh -c "echo \$ANTHROPIC_API_KEY" 2>&1)
 echo "$OUTPUT" | grep -v "ENC\[" | grep -q "." && pass "T28: kpm run decrypts for child" || warn "T28: $OUTPUT"
 
-OUTPUT=$(mock-codex "test" 2>&1) || true
-echo "$OUTPUT" | grep -q "still encrypted\|ENC\[kpm:" && pass "T29: mock-codex fails with ciphertext" || warn "T29: $OUTPUT"
+if command -v mock-codex &>/dev/null; then
+    OUTPUT=$(mock-codex "test" 2>&1) || true
+    echo "$OUTPUT" | grep -q "still encrypted\|ENC\[kpm:" && pass "T29: mock-codex fails with ciphertext" || warn "T29: $OUTPUT"
 
-OUTPUT=$(kpm run -- mock-codex "test" 2>&1)
-echo "$OUTPUT" | grep -q "Response:" && pass "T30: mock-codex works via kpm run" || warn "T30: $OUTPUT"
+    OUTPUT=$(kpm run -- mock-codex "test" 2>&1)
+    echo "$OUTPUT" | grep -q "Response:" && pass "T30: mock-codex works via kpm run" || warn "T30: $OUTPUT"
+else
+    warn "T29: mock-codex not installed (skipped — install with kpm-base image)"
+    warn "T30: mock-codex not installed (skipped)"
+fi
 
 echo ""
 
