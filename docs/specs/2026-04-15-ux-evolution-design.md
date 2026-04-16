@@ -348,13 +348,24 @@ Direct path, no variables. Works when you don't need the indirection.
 
 ### Profile variable resolution
 
-1. Check `.kpm/config.yaml` in current directory (walk up to git root? or pwd only?)
-2. Variable syntax: `{{profile:key}}` with optional default `{{profile:key:-default}}`
-3. Unresolved variables → error with clear message: `profile variable 'company_name' not set in .kpm/config.yaml`
+1. Check `.kpm/config.yaml` in current working directory (project-level, highest precedence)
+2. Fallback: `$XDG_CONFIG_HOME/kpm/config.yaml` (user global config — useful for defaults)
+3. Variable syntax: `{{profile:key}}` with optional default `{{profile:key:-default}}`
+4. Unresolved variables → clear error: `profile variable 'company_name' not found in .kpm/config.yaml or global config`
 
-### Recommendation: pwd only
+Profile variables can be used in **both project-level and user-level templates.** Resolution always starts with `.kpm/config.yaml` in the current working directory, falling back to the global `~/.config/kpm/config.yaml`. This allows reusable user templates (e.g. `customers/{{profile:company_name}}/claude.template`) to adapt automatically based on the project context.
+
+Profile values are **not secrets** — they are configuration (company names, environment names, region identifiers). They are plaintext in the config file. Secrets use `${kms:...}` references; profiles use `{{profile:...}}`.
+
+### pwd only for project config (no directory walking)
 
 Do NOT walk up directories looking for `.kpm/config.yaml`. Only check the current working directory. Walking up creates surprising behavior and conflicts with git-root detection tools. If the user needs project-level config, they `cd` to the project root or set `KPM_PROJECT` env var.
+
+### Edge case handling
+
+- No `.kpm/config.yaml` in pwd → fall back to global config. If key still missing → clear, actionable error
+- Profile key missing → error (never silently use empty string)
+- Keep values simple for v0.1 — string values only, no nested objects or arrays
 
 ---
 
