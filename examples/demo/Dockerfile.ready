@@ -7,7 +7,7 @@ RUN git clone --depth 1 https://github.com/TheGenXCoder/kpm.git /tmp/kpm-src \
     && rm -rf /tmp/kpm-src
 
 # Download pre-built agentkms-dev (no source build needed)
-RUN curl -sL https://github.com/TheGenXCoder/agentkms/releases/download/v0.1.1/agentkms-dev-linux-amd64 -o /usr/local/bin/agentkms-dev \
+RUN curl -sL https://github.com/TheGenXCoder/agentkms/releases/download/v0.2.0/agentkms-dev-linux-amd64 -o /usr/local/bin/agentkms-dev \
     && chmod +x /usr/local/bin/agentkms-dev
 
 # mock-codex is already in kpm-base

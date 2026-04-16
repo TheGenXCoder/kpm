@@ -195,7 +195,7 @@ JWT_SECRET=${kms:kv/app/config#jwt_secret}
 }
 
 // releaseURL is the download URL pattern for pre-built agentkms-dev binaries.
-const releaseURL = "https://github.com/TheGenXCoder/agentkms/releases/download/v0.1.1/agentkms-dev-%s-%s"
+const releaseURL = "https://github.com/TheGenXCoder/agentkms/releases/download/v0.2.0/agentkms-dev-%s-%s"
 
 // buildDevServer downloads a pre-built agentkms-dev binary.
 // Falls back to building from source if the download fails.
