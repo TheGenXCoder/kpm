@@ -47,7 +47,7 @@ KPM fixes this in two commands. Your secrets go into one place, encrypted, audit
 ## Quick Start
 
 ```bash
-# Install (requires go 1.21+ and git; release binaries coming soon)
+# Install (uses prebuilt binary; falls back to source build if Go is installed)
 curl -sL kpm.catalyst9.ai/install | bash
 
 # Quickstart: generates PKI, starts local AgentKMS, seeds demo secrets,
@@ -434,9 +434,9 @@ curl -sL https://raw.githubusercontent.com/TheGenXCoder/kpm/main/tests/run-tests
 
 - **v0.2.0** — Import scanner: `kpm import --scan ~/.config` finds secrets in your files, offers to secure them
 - **ABAC policy** — Time-based, network-based, and tag-based access rules
-- **Config profiles** — Stow-like config management with secrets, layered per machine/environment
-- **Release binaries** — No Go requirement for installation
+- **`kpm run --secure` allow-lists** — per-tool env filtering (see [Part 4](docs/blog/part-4-ai-agents.md))
 - **Split knowledge** — PCI-DSS dual-control: N-of-M authorization for sensitive secrets
+- **Windows support** — planned post-v0.2.0
 
 ---
 
