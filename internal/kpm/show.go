@@ -117,6 +117,46 @@ func PrintShow(w io.Writer, secrets []ManagedSecret, sessionID string, ttlRemain
 	fmt.Fprintf(w, "\n%d secrets managed\n", len(secrets))
 }
 
+// PrintShowWithProfile displays managed secrets + the merged profile.
+// Used by kpm show --profile.
+func PrintShowWithProfile(w io.Writer, secrets []ManagedSecret, sessionID string, ttlRemaining time.Duration, filterName string) {
+	PrintShow(w, secrets, sessionID, ttlRemaining, filterName)
+
+	sources := LoadProfileWithSources()
+	if len(sources) == 0 {
+		fmt.Fprintln(w, "\nProfile: (no .kpm/config.yaml found in cwd or ancestors)")
+		return
+	}
+
+	fmt.Fprintln(w, "\nProfile:")
+
+	// Collect and sort keys for stable output
+	keys := make([]string, 0, len(sources))
+	for k := range sources {
+		keys = append(keys, k)
+	}
+	for i := 0; i < len(keys); i++ {
+		for j := i + 1; j < len(keys); j++ {
+			if keys[i] > keys[j] {
+				keys[i], keys[j] = keys[j], keys[i]
+			}
+		}
+	}
+
+	maxLen := 0
+	for _, k := range keys {
+		if len(k) > maxLen {
+			maxLen = len(k)
+		}
+	}
+
+	for _, k := range keys {
+		ps := sources[k]
+		padding := strings.Repeat(" ", maxLen-len(k))
+		fmt.Fprintf(w, "  %s%s: %s\t← %s\n", k, padding, ps.Value, ps.Source)
+	}
+}
+
 // formatShowDuration formats a duration as "4m32s" or "45s".
 func formatShowDuration(d time.Duration) string {
 	m := int(d.Minutes())

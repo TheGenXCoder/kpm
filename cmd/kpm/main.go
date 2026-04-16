@@ -32,7 +32,7 @@ Usage:
   kpm get <ref>                   Fetch a single secret
   kpm init                        Create config file (XDG-compliant)
   kpm tree                        Show template hierarchy and managed secrets
-  kpm show [VAR_NAME]             Show managed secrets in current environment
+  kpm show [VAR_NAME] [--profile] Show managed secrets (--profile adds merged profile)
   kpm profile                     Show merged profile variables for current directory
   kpm config push [dir]           Push templates to AgentKMS (requires agentkms-dev)
   kpm config pull [dir]           Pull templates from AgentKMS
@@ -125,18 +125,23 @@ func main() {
 		runProfile()
 		return
 	case "show":
-		fs.Parse(os.Args[2:])
+		showFs := flag.NewFlagSet("show", flag.ContinueOnError)
+		showProfile := showFs.Bool("profile", false, "also show merged profile variables")
+		showFs.Parse(os.Args[2:])
 		secrets, sid := kpm.ScanManagedSecrets()
 		ttl := time.Duration(0)
 		if sid != "" {
-			// Try to get TTL — use default 300s if no config loaded
 			ttl = kpm.SessionTTLRemaining(sid, 300)
 		}
 		filterName := ""
-		if args := fs.Args(); len(args) > 0 {
+		if args := showFs.Args(); len(args) > 0 {
 			filterName = args[0]
 		}
-		kpm.PrintShow(os.Stdout, secrets, sid, ttl, filterName)
+		if *showProfile {
+			kpm.PrintShowWithProfile(os.Stdout, secrets, sid, ttl, filterName)
+		} else {
+			kpm.PrintShow(os.Stdout, secrets, sid, ttl, filterName)
+		}
 		return
 	case "_listen":
 		// Hidden internal command — started by kpm env to run a persistent listener.

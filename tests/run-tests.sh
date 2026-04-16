@@ -322,6 +322,10 @@ echo "$OUTPUT" | grep -q "project.*project-x" && pass "P3: profile has project f
 # P4: child overrides parent (region should be us-east-override, not us-east)
 echo "$OUTPUT" | grep -q "us-east-override" && pass "P4: child overrides parent for same key" || fail "P4: $OUTPUT"
 
+# P5: kpm show --profile displays merged profile
+OUTPUT=$(kpm show --profile 2>&1)
+echo "$OUTPUT" | grep -q "Profile:" && echo "$OUTPUT" | grep -q "customer.*acme" && pass "P5: kpm show --profile shows merged profile" || fail "P5: $OUTPUT"
+
 cd - > /dev/null
 rm -rf "$PROFILE_ROOT"
 
