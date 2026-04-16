@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -60,6 +62,19 @@ func ParseTemplate(r io.Reader) ([]TemplateEntry, error) {
 			continue
 		}
 
+		// Check for include directive (no KEY= prefix): ${kms:include/path}
+		if strings.HasPrefix(line, "${kms:include/") {
+			ref, ok := ParseKMSRef(line)
+			if ok && ref.Type == "include" {
+				entries = append(entries, TemplateEntry{
+					EnvKey:   "", // no env key — this is an include directive
+					IsKMSRef: true,
+					Ref:      ref,
+				})
+				continue
+			}
+		}
+
 		// Split on first '='.
 		eqIdx := strings.IndexByte(line, '=')
 		if eqIdx < 0 {
@@ -89,4 +104,142 @@ func ParseTemplate(r io.Reader) ([]TemplateEntry, error) {
 	}
 
 	return entries, nil
+}
+
+// ResolveTemplateWithIncludes reads a template file, resolves includes, and returns entries.
+// Profile variables in include paths are resolved. Circular includes are detected.
+// The override semantics: included entries come first; current template entries for
+// the same EnvKey override (last-write-wins via deduplication at the end).
+func ResolveTemplateWithIncludes(path string, profile Profile, seen map[string]bool) ([]TemplateEntry, error) {
+	if seen == nil {
+		seen = map[string]bool{}
+	}
+
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		absPath = path
+	}
+	if seen[absPath] {
+		return nil, fmt.Errorf("circular include detected: %s", path)
+	}
+	seen[absPath] = true
+
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open template %s: %w", path, err)
+	}
+	defer f.Close()
+
+	entries, err := ParseTemplate(f)
+	if err != nil {
+		return nil, err
+	}
+
+	// Process entries: expand includes, pass everything else through.
+	// Included entries come before current-file entries (so current overrides for same key).
+	var result []TemplateEntry
+	var ownEntries []TemplateEntry
+
+	for _, e := range entries {
+		if e.IsKMSRef && e.Ref.Type == "include" {
+			// Resolve profile variables in the include path.
+			includePath := e.Ref.Path
+			if profile != nil {
+				resolved, err := profile.Resolve(includePath)
+				if err != nil {
+					return nil, fmt.Errorf("resolve include path %q: %w", includePath, err)
+				}
+				includePath = resolved
+			}
+
+			fullPath := findIncludeTemplate(includePath)
+			if fullPath == "" {
+				return nil, fmt.Errorf("include target %q not found (checked user and project templates)", includePath)
+			}
+
+			included, err := ResolveTemplateWithIncludes(fullPath, profile, seen)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, included...)
+		} else {
+			ownEntries = append(ownEntries, e)
+		}
+	}
+
+	// Own entries come after includes; for duplicate keys, own entries win.
+	result = append(result, ownEntries...)
+
+	// Deduplicate: last entry for each key wins (own entries override includes).
+	return deduplicateEntries(result), nil
+}
+
+// deduplicateEntries keeps the last entry for each EnvKey (later = higher priority).
+// Entries without an EnvKey (include directives not yet expanded) are dropped.
+func deduplicateEntries(entries []TemplateEntry) []TemplateEntry {
+	seen := map[string]int{} // key -> index in result
+	var result []TemplateEntry
+
+	for _, e := range entries {
+		if e.EnvKey == "" {
+			continue // skip unexpanded include directives
+		}
+		if idx, exists := seen[e.EnvKey]; exists {
+			result[idx] = e // overwrite earlier occurrence
+		} else {
+			seen[e.EnvKey] = len(result)
+			result = append(result, e)
+		}
+	}
+	return result
+}
+
+// ResolveProfileVarsInEntries resolves {{profile:...}} variables in KMS ref paths and keys.
+// Call this after ResolveTemplateWithIncludes and before secret resolution.
+func ResolveProfileVarsInEntries(entries []TemplateEntry, profile Profile) ([]TemplateEntry, error) {
+	if profile == nil {
+		return entries, nil
+	}
+	result := make([]TemplateEntry, len(entries))
+	copy(result, entries)
+
+	for i, e := range result {
+		if !e.IsKMSRef {
+			continue
+		}
+		resolvedPath, err := profile.Resolve(e.Ref.Path)
+		if err != nil {
+			return nil, fmt.Errorf("entry %q path: %w", e.EnvKey, err)
+		}
+		resolvedKey, err := profile.Resolve(e.Ref.Key)
+		if err != nil {
+			return nil, fmt.Errorf("entry %q key: %w", e.EnvKey, err)
+		}
+		result[i].Ref.Path = resolvedPath
+		result[i].Ref.Key = resolvedKey
+	}
+	return result, nil
+}
+
+// findIncludeTemplate locates a template file by logical path.
+// Checks project templates (.kpm/templates/) then user templates (ConfigDir/templates/).
+// Appends .template suffix if not present.
+func findIncludeTemplate(path string) string {
+	if !strings.HasSuffix(path, ".template") {
+		path = path + ".template"
+	}
+
+	// Check project templates first (higher priority)
+	projectPath := filepath.Join(ProjectTemplatesDir(), path)
+	if _, err := os.Stat(projectPath); err == nil {
+		return projectPath
+	}
+
+	// Check user templates
+	userPath := filepath.Join(TemplatesDir(), path)
+	if _, err := os.Stat(userPath); err == nil {
+		return userPath
+	}
+
+	return ""
 }

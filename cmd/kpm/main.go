@@ -33,6 +33,7 @@ Usage:
   kpm init                        Create config file (XDG-compliant)
   kpm tree                        Show template hierarchy and managed secrets
   kpm show [VAR_NAME]             Show managed secrets in current environment
+  kpm profile                     Show merged profile variables for current directory
   kpm config push [dir]           Push templates to AgentKMS (requires agentkms-dev)
   kpm config pull [dir]           Pull templates from AgentKMS
   kpm version                     Print version
@@ -119,6 +120,9 @@ func main() {
 	case "tree":
 		levels := kpm.DiscoverTemplateLevels()
 		kpm.PrintTree(os.Stdout, levels)
+		return
+	case "profile":
+		runProfile()
 		return
 	case "show":
 		fs.Parse(os.Args[2:])
@@ -410,16 +414,16 @@ func buildClient(cfg *kpm.Config) *kpm.Client {
 }
 
 func runEnv(ctx context.Context, cfg *kpm.Config, tmplPath, format string, plaintext bool, strict bool) {
-	f, err := os.Open(tmplPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error opening template %s: %v\n", tmplPath, err)
-		os.Exit(1)
-	}
-	defer f.Close()
+	profile, _ := kpm.LoadProfile()
 
-	entries, err := kpm.ParseTemplate(f)
+	entries, err := kpm.ResolveTemplateWithIncludes(tmplPath, profile, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error parsing template: %v\n", err)
+		os.Exit(1)
+	}
+	entries, err = kpm.ResolveProfileVarsInEntries(entries, profile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error resolving profile variables: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -581,16 +585,16 @@ func runRun(ctx context.Context, cfg *kpm.Config, tmplPath string, cmdArgs []str
 		os.Exit(exitCode)
 	}
 
-	f, err := os.Open(tmplPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error opening template %s: %v\n", tmplPath, err)
-		os.Exit(1)
-	}
-	defer f.Close()
+	profile, _ := kpm.LoadProfile()
 
-	entries, err := kpm.ParseTemplate(f)
+	entries, err := kpm.ResolveTemplateWithIncludes(tmplPath, profile, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error parsing template: %v\n", err)
+		os.Exit(1)
+	}
+	entries, err = kpm.ResolveProfileVarsInEntries(entries, profile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error resolving profile variables: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -827,6 +831,42 @@ func runListen() {
 
 	dl.Serve() //nolint:errcheck
 	kpm.CleanSession(*sessionFlag)
+}
+
+func runProfile() {
+	sources := kpm.LoadProfileWithSources()
+	if len(sources) == 0 {
+		fmt.Fprintln(os.Stderr, "no profile variables found (checked .kpm/config.yaml up to root + global config)")
+		return
+	}
+
+	// Collect and sort keys for stable output
+	keys := make([]string, 0, len(sources))
+	for k := range sources {
+		keys = append(keys, k)
+	}
+	// Simple sort
+	for i := 0; i < len(keys); i++ {
+		for j := i + 1; j < len(keys); j++ {
+			if keys[i] > keys[j] {
+				keys[i], keys[j] = keys[j], keys[i]
+			}
+		}
+	}
+
+	// Find max key width for alignment
+	maxLen := 0
+	for _, k := range keys {
+		if len(k) > maxLen {
+			maxLen = len(k)
+		}
+	}
+
+	for _, k := range keys {
+		ps := sources[k]
+		padding := strings.Repeat(" ", maxLen-len(k))
+		fmt.Fprintf(os.Stdout, "%s%s: %s\t← %s\n", k, padding, ps.Value, ps.Source)
+	}
 }
 
 func runDecrypt(blob string) {
