@@ -280,6 +280,131 @@ echo "$ANTHROPIC_API_KEY" | grep -q "ENC\[kpm:" && ! echo "$ANTHROPIC_API_KEY" |
 
 echo ""
 
+# ─── PROFILE VARIABLES (Phase D) ─────────────────────────────────────────────
+
+echo "=== Profile variables ==="
+
+# Set up nested directory structure with profile configs at each level
+PROFILE_ROOT=$(mktemp -d)
+mkdir -p "$PROFILE_ROOT/clients/acme/us-east/project-x/.kpm"
+mkdir -p "$PROFILE_ROOT/clients/acme/us-east/.kpm"
+mkdir -p "$PROFILE_ROOT/clients/acme/.kpm"
+
+cat > "$PROFILE_ROOT/clients/acme/.kpm/config.yaml" <<EOF
+profile:
+  customer: acme
+EOF
+
+cat > "$PROFILE_ROOT/clients/acme/us-east/.kpm/config.yaml" <<EOF
+profile:
+  region: us-east
+EOF
+
+cat > "$PROFILE_ROOT/clients/acme/us-east/project-x/.kpm/config.yaml" <<EOF
+profile:
+  project: project-x
+  environment: staging
+  region: us-east-override
+EOF
+
+cd "$PROFILE_ROOT/clients/acme/us-east/project-x"
+
+# P1: kpm profile shows merged values
+OUTPUT=$(kpm profile 2>&1)
+echo "$OUTPUT" | grep -q "customer.*acme" && pass "P1: profile merges customer from parent" || fail "P1: $OUTPUT"
+
+# P2: region from middle level present
+echo "$OUTPUT" | grep -q "region" && pass "P2: profile merges region from middle level" || fail "P2: $OUTPUT"
+
+# P3: project from cwd present
+echo "$OUTPUT" | grep -q "project.*project-x" && pass "P3: profile has project from cwd" || fail "P3: $OUTPUT"
+
+# P4: child overrides parent (region should be us-east-override, not us-east)
+echo "$OUTPUT" | grep -q "us-east-override" && pass "P4: child overrides parent for same key" || fail "P4: $OUTPUT"
+
+cd - > /dev/null
+rm -rf "$PROFILE_ROOT"
+
+echo ""
+
+# ─── TEMPLATE INCLUDES (Phase C) ─────────────────────────────────────────────
+
+echo "=== Template includes ==="
+
+# Seed a secret for the include test
+echo "included-db-password" | kpm add test/db --tags ci 2>&1 > /dev/null
+
+# Create a base template and a template that includes it
+TEMPLATES_DIR="$(kpm_templates)"
+mkdir -p "$TEMPLATES_DIR"
+
+cat > "$TEMPLATES_DIR/test-base.template" <<'EOF'
+DB_PASSWORD=${kms:test/db}
+EOF
+
+cat > "$TEMPLATES_DIR/test-app.template" <<'EOF'
+${kms:include/test-base}
+APP_NAME=my-service
+EOF
+
+# I1: Include pulls in variables from base template
+OUTPUT=$(kpm env --from "$TEMPLATES_DIR/test-app.template" --plaintext 2>&1)
+echo "$OUTPUT" | grep -q "DB_PASSWORD=included-db-password" && pass "I1: include pulls variables from base" || fail "I1: $OUTPUT"
+
+# I2: Current template adds its own variables
+echo "$OUTPUT" | grep -q "APP_NAME=my-service" && pass "I2: own variables preserved" || fail "I2: $OUTPUT"
+
+# I3: Circular includes are detected
+cat > "$TEMPLATES_DIR/circ-a.template" <<'EOF'
+${kms:include/circ-b}
+A=1
+EOF
+cat > "$TEMPLATES_DIR/circ-b.template" <<'EOF'
+${kms:include/circ-a}
+B=2
+EOF
+
+OUTPUT=$(kpm env --from "$TEMPLATES_DIR/circ-a.template" --plaintext 2>&1) || true
+echo "$OUTPUT" | grep -qi "circular" && pass "I3: circular include detected" || fail "I3: $OUTPUT"
+
+# Cleanup include test files
+rm -f "$TEMPLATES_DIR/test-base.template" "$TEMPLATES_DIR/test-app.template" "$TEMPLATES_DIR/circ-a.template" "$TEMPLATES_DIR/circ-b.template"
+
+echo ""
+
+# ─── PROFILE VARS IN TEMPLATES ───────────────────────────────────────────────
+
+echo "=== Profile variables in templates ==="
+
+# Create a project dir with a profile
+PROF_TEST=$(mktemp -d)
+mkdir -p "$PROF_TEST/.kpm"
+cat > "$PROF_TEST/.kpm/config.yaml" <<EOF
+profile:
+  testkey: test-value
+EOF
+
+# Create a template that uses the profile variable in a secret ref
+# (We'll use it to reference test/db which we added above)
+mkdir -p "$TEMPLATES_DIR"
+cat > "$TEMPLATES_DIR/profile-test.template" <<'EOF'
+TEST_VAR={{profile:testkey}}
+EOF
+
+cd "$PROF_TEST"
+
+OUTPUT=$(kpm env --from "$TEMPLATES_DIR/profile-test.template" --plaintext 2>&1)
+echo "$OUTPUT" | grep -q "TEST_VAR=test-value" && pass "PV1: profile variable resolves in template value" || fail "PV1: $OUTPUT"
+
+cd - > /dev/null
+rm -rf "$PROF_TEST"
+rm -f "$TEMPLATES_DIR/profile-test.template"
+
+# Cleanup the test/db secret
+echo y | kpm remove test/db 2>&1 > /dev/null || true
+
+echo ""
+
 # ─── SUMMARY ─────────────────────────────────────────────────────────────────
 
 echo "============================================"
