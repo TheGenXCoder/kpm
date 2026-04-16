@@ -442,12 +442,22 @@ curl -sL https://raw.githubusercontent.com/TheGenXCoder/kpm/main/tests/run-tests
 
 ## Documentation
 
+**Product narrative:**
 - [**Part 1: I had 47 places I stored secrets**](docs/blog/part-1-scattered-secrets.md) — why KPM exists
 - [**Part 2: Your .env files are a liability**](docs/blog/part-2-env-files-liability.md) — ciphertext-by-default and JIT decrypt
 - [**Part 3: One template tree, twelve clients, zero friction**](docs/blog/part-3-multi-client.md) — profiles + includes
 - [**Part 4: AI coding agents make the secrets problem worse**](docs/blog/part-4-ai-agents.md) — process-scoped decryption for agentic workflows
+
+**Policy:**
 - [**SECURITY.md**](SECURITY.md) — threat model, defended vs not defended, disclosure policy
 - [**CONTRIBUTING.md**](CONTRIBUTING.md) — how to contribute, security-sensitive areas
+- [**CHANGELOG.md**](CHANGELOG.md) — release history
+
+**Engineering design records** (in the AgentKMS repo — server-side implementation lives there):
+- [**Forensics as the v0.3 product target**](https://github.com/TheGenXCoder/agentkms/blob/main/docs/design/2026-04-16-forensics-v0.3.md)
+- [**Dynamic Secrets — AgentKMS as secret-issuing authority**](https://github.com/TheGenXCoder/agentkms/blob/main/docs/design/2026-04-16-dynamic-secrets.md)
+- [**Deployment model & sovereignty principle**](https://github.com/TheGenXCoder/agentkms/blob/main/docs/design/2026-04-16-deployment-model.md)
+- [**Design record index**](https://github.com/TheGenXCoder/agentkms/blob/main/docs/design/README.md)
 
 ---
 
