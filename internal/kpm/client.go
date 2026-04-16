@@ -6,12 +6,54 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"time"
 
 	"github.com/TheGenXCoder/kpm/pkg/tlsutil"
 )
+
+// serverErrorResponse matches the JSON error shape returned by AgentKMS.
+type serverErrorResponse struct {
+	Error string `json:"error"`
+	Code  string `json:"code"`
+}
+
+// serverError builds a user-friendly error from a non-OK HTTP response.
+// It reads the response body (which is JSON), extracts the "error" and "code"
+// fields, and returns a formatted error. If the body isn't parseable, it
+// falls back to "server returned {status}".
+//
+// The response body is consumed (caller should not read it again).
+func serverError(resp *http.Response, operation string) error {
+	body, _ := io.ReadAll(resp.Body)
+	var sr serverErrorResponse
+	if json.Unmarshal(body, &sr) == nil && sr.Error != "" {
+		if sr.Code != "" {
+			return fmt.Errorf("%s: %s (%s)", operation, sr.Error, sr.Code)
+		}
+		return fmt.Errorf("%s: %s", operation, sr.Error)
+	}
+	// Couldn't parse — fall back to status code.
+	// Common HTTP status codes with friendly hints:
+	switch resp.StatusCode {
+	case http.StatusUnauthorized:
+		return fmt.Errorf("%s: unauthorized (401) — check your mTLS certificates", operation)
+	case http.StatusForbidden:
+		return fmt.Errorf("%s: forbidden (403) — access denied by policy", operation)
+	case http.StatusNotFound:
+		return fmt.Errorf("%s: not found (404)", operation)
+	case http.StatusTooManyRequests:
+		return fmt.Errorf("%s: rate limited (429) — try again in a moment", operation)
+	case http.StatusInternalServerError:
+		return fmt.Errorf("%s: server error (500) — check server logs", operation)
+	case http.StatusServiceUnavailable:
+		return fmt.Errorf("%s: service unavailable (503) — is AgentKMS running?", operation)
+	default:
+		return fmt.Errorf("%s: server returned %d", operation, resp.StatusCode)
+	}
+}
 
 // LLMCredential is the response from GET /credentials/llm/{provider}.
 type LLMCredential struct {
@@ -86,7 +128,7 @@ func (c *Client) Authenticate(ctx context.Context) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("auth failed: server returned %d", resp.StatusCode)
+		return serverError(resp, "authenticate")
 	}
 
 	var body struct {
@@ -158,7 +200,7 @@ func (c *Client) FetchLLM(ctx context.Context, provider string) (*LLMCredential,
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("server returned %d for llm/%s", resp.StatusCode, provider)
+		return nil, serverError(resp, "fetch LLM "+provider)
 	}
 
 	var body struct {
@@ -194,7 +236,7 @@ func (c *Client) FetchRegistrySecret(ctx context.Context, path string) (map[stri
 		return nil, fmt.Errorf("secret not found: %s", path)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("server returned %d for %s", resp.StatusCode, path)
+		return nil, serverError(resp, "fetch "+path)
 	}
 
 	// Server returns a flat map: {"value": "secret"} or {"field1": "val1", "field2": "val2"}
@@ -221,7 +263,7 @@ func (c *Client) FetchGeneric(ctx context.Context, path string) (*GenericCredent
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("server returned %d for generic/%s", resp.StatusCode, path)
+		return nil, serverError(resp, "fetch generic/"+path)
 	}
 
 	var body struct {

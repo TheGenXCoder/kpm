@@ -68,7 +68,7 @@ func (c *Client) WriteSecret(ctx context.Context, path string, value []byte) (*W
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		return nil, fmt.Errorf("server returned %d for POST /secrets/%s", resp.StatusCode, path)
+		return nil, serverError(resp, "write " + path)
 	}
 
 	var result WriteResult
@@ -89,7 +89,7 @@ func (c *Client) WriteSecretFields(ctx context.Context, path string, fields map[
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		return nil, fmt.Errorf("server returned %d for POST /secrets/%s", resp.StatusCode, path)
+		return nil, serverError(resp, "write " + path)
 	}
 
 	var result WriteResult
@@ -123,7 +123,7 @@ func (c *Client) WriteMetadata(ctx context.Context, path, desc string, tags []st
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		return fmt.Errorf("server returned %d", resp.StatusCode)
+		return serverError(resp, "request")
 	}
 	return nil
 }
@@ -142,7 +142,7 @@ func (c *Client) ListMetadata(ctx context.Context, includeDeleted bool) ([]Secre
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("server returned %d", resp.StatusCode)
+		return nil, serverError(resp, "request")
 	}
 
 	var body struct {
@@ -171,7 +171,7 @@ func (c *Client) GetMetadata(ctx context.Context, path string) (*SecretMetadata,
 		return nil, nil
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("server returned %d", resp.StatusCode)
+		return nil, serverError(resp, "request")
 	}
 
 	var meta SecretMetadata
@@ -196,7 +196,7 @@ func (c *Client) DeleteSecret(ctx context.Context, path string, purge bool) erro
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		return fmt.Errorf("server returned %d", resp.StatusCode)
+		return serverError(resp, "request")
 	}
 	return nil
 }
@@ -212,7 +212,7 @@ func (c *Client) GetHistory(ctx context.Context, path string) ([]VersionEntry, e
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("server returned %d", resp.StatusCode)
+		return nil, serverError(resp, "request")
 	}
 
 	var body struct {
