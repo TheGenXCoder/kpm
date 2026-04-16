@@ -348,24 +348,71 @@ Direct path, no variables. Works when you don't need the indirection.
 
 ### Profile variable resolution
 
-1. Check `.kpm/config.yaml` in current working directory (project-level, highest precedence)
-2. Fallback: `$XDG_CONFIG_HOME/kpm/config.yaml` (user global config — useful for defaults)
-3. Variable syntax: `{{profile:key}}` with optional default `{{profile:key:-default}}`
-4. Unresolved variables → clear error: `profile variable 'company_name' not found in .kpm/config.yaml or global config`
+Profile configs are **merged up the directory tree** — child overrides parent for the same key. This eliminates repetition across nested project structures.
 
-Profile variables can be used in **both project-level and user-level templates.** Resolution always starts with `.kpm/config.yaml` in the current working directory, falling back to the global `~/.config/kpm/config.yaml`. This allows reusable user templates (e.g. `customers/{{profile:company_name}}/claude.template`) to adapt automatically based on the project context.
+**Resolution order (bottom-up merge):**
 
-Profile values are **not secrets** — they are configuration (company names, environment names, region identifiers). They are plaintext in the config file. Secrets use `${kms:...}` references; profiles use `{{profile:...}}`.
+1. Walk from current working directory up to filesystem root
+2. At each level, if `.kpm/config.yaml` exists, load its `profile:` section
+3. Merge: deeper (child) values override shallower (parent) values for the same key
+4. Final fallback: `$XDG_CONFIG_HOME/kpm/config.yaml` (user global defaults)
+5. Variable syntax: `{{profile:key}}` with optional default `{{profile:key:-default}}`
+6. Unresolved variables → clear error with the list of directories checked
 
-### pwd only for project config (no directory walking)
+**Example: multi-level org structure**
 
-Do NOT walk up directories looking for `.kpm/config.yaml`. Only check the current working directory. Walking up creates surprising behavior and conflicts with git-root detection tools. If the user needs project-level config, they `cd` to the project root or set `KPM_PROJECT` env var.
+```
+~/clients/acme/.kpm/config.yaml
+  profile:
+    customer: acme
+
+~/clients/acme/us-east/.kpm/config.yaml
+  profile:
+    region: us-east
+
+~/clients/acme/us-east/project-x/.kpm/config.yaml
+  profile:
+    project: project-x
+    environment: staging
+```
+
+When working in `~/clients/acme/us-east/project-x/`:
+
+```
+Resolved profile:
+  customer: acme          ← from ~/clients/acme/.kpm/config.yaml
+  region: us-east         ← from ~/clients/acme/us-east/.kpm/config.yaml
+  project: project-x     ← from ~/clients/acme/us-east/project-x/.kpm/config.yaml
+  environment: staging    ← from ~/clients/acme/us-east/project-x/.kpm/config.yaml
+```
+
+One template handles all permutations:
+
+```bash
+# customers/base-db.template (reusable across all projects)
+DB_HOST=${kms:{{profile:customer}}/{{profile:region}}/{{profile:project}}/db#host}
+DB_PORT=${kms:{{profile:customer}}/{{profile:region}}/{{profile:project}}/db#port}
+DB_PASSWORD=${kms:{{profile:customer}}/{{profile:region}}/{{profile:project}}/db#password}
+```
+
+**Why walking is safe for profiles (but not templates):**
+
+- **Templates** control secret access — walking up could accidentally grant access to secrets from a parent scope. Templates stay explicit: project level or user level only.
+- **Profile config** is plaintext metadata (company names, regions, project IDs). Walking up and merging is safe and expected — same pattern as `.gitconfig`, `.editorconfig`, `.npmrc`.
+
+**Rule:** Templates don't walk. Profiles do.
+
+Profile variables can be used in **both project-level and user-level templates.** This allows reusable user templates (e.g. `customers/{{profile:customer}}/{{profile:environment}}/db.template`) to adapt automatically based on the project context.
+
+Profile values are **not secrets** — they are configuration (company names, environment names, region identifiers, project IDs, division codes). They are plaintext in the config file. Secrets use `${kms:...}` references; profiles use `{{profile:...}}`.
 
 ### Edge case handling
 
-- No `.kpm/config.yaml` in pwd → fall back to global config. If key still missing → clear, actionable error
-- Profile key missing → error (never silently use empty string)
+- No `.kpm/config.yaml` found at any level → fall back to global config only
+- Profile key missing after full merge → clear, actionable error (never silently use empty string)
 - Keep values simple for v0.1 — string values only, no nested objects or arrays
+- Walk stops at filesystem root (or configurable stop marker like `.git` in the future)
+- Circular references impossible (walking is strictly upward)
 
 ---
 
@@ -469,10 +516,12 @@ Same `claude.template`, different secrets. Zero context-switching friction.
 
 ### Phase D: Profile variables (build next)
 
-17. Read `.kpm/config.yaml` from pwd (profile section)
-18. Parse `{{profile:key}}` and `{{profile:key:-default}}` in include paths
-19. Error on unresolved variables
-20. Tests for multi-client scenarios
+17. Walk up directory tree collecting `.kpm/config.yaml` profile sections
+18. Merge bottom-up (child overrides parent for same key)
+19. Final fallback to `$XDG_CONFIG_HOME/kpm/config.yaml`
+20. Parse `{{profile:key}}` and `{{profile:key:-default}}` in include paths and template references
+21. Error on unresolved variables with list of directories checked
+22. Tests for multi-level org structure (customer → region → project → environment)
 
 ---
 
@@ -486,5 +535,6 @@ Same `claude.template`, different secrets. Zero context-switching friction.
 | Command templates standalone | Not inheriting shell-env | Prevents over-provisioning, explicit includes for composition |
 | Include directive | ${kms:include:path} | Consistent with existing ${kms:...} syntax |
 | Profile variables | {{profile:key}} | Distinct from ${kms:...} to avoid ambiguity |
-| .kpm/config.yaml from pwd only | No directory walking | Predictable, no surprises |
+| Templates: no directory walking | Explicit project or user level | Prevents accidental secret access from parent scope |
+| Profile config: walk up and merge | Bottom-up merge, child overrides parent | Eliminates repetition in nested org structures. Safe because profiles are plaintext metadata, not secrets. Same pattern as .gitconfig, .editorconfig, .npmrc |
 | Template path convention | Directory tree | Mirrors filesystem conventions, scales to multi-client |
