@@ -54,6 +54,12 @@ NC="\033[0m"
 
 PASS=0
 FAIL=0
+
+# Path helpers (XDG with legacy fallback)
+kpm_config_dir() { echo "${XDG_CONFIG_HOME:-$HOME/.config}/kpm"; }
+kpm_data_dir() { echo "${XDG_DATA_HOME:-$HOME/.local/share}/kpm"; }
+kpm_templates() { echo "$(kpm_config_dir)/templates"; }
+kpm_certs() { echo "$(kpm_data_dir)/certs"; }
 WARN=0
 
 pass() { echo -e "  ${GREEN}PASS${NC} $1"; PASS=$((PASS+1)); }
@@ -98,7 +104,7 @@ echo "=== Running kpm quickstart ==="
 kpm quickstart 2>&1 | tail -3
 sleep 2
 
-if curl -sk --cert ~/.kpm/certs/client.crt --key ~/.kpm/certs/client.key --cacert ~/.kpm/certs/ca.crt https://127.0.0.1:8443/healthz 2>/dev/null | grep -q "ok"; then
+if curl -sk --cert "$(kpm_certs)/client.crt" --key "$(kpm_certs)/client.key" --cacert "$(kpm_certs)/ca.crt" https://127.0.0.1:8443/healthz 2>/dev/null | grep -q "ok"; then
     pass "AgentKMS dev server running + healthy"
 else
     fail "AgentKMS dev server not reachable"
@@ -213,10 +219,10 @@ echo "=== Template system ==="
 OUTPUT=$(kpm tree 2>&1)
 echo "$OUTPUT" | grep -q "User:" && echo "$OUTPUT" | grep -q "template" && pass "T23: kpm tree" || fail "T23: $OUTPUT"
 
-OUTPUT=$(kpm env --from ~/.kpm/templates/shell-env.template 2>&1)
+OUTPUT=$(kpm env --from $(kpm_templates)/shell-env.template 2>&1)
 echo "$OUTPUT" | grep -q "ENC\[kpm:" && pass "T24: kpm env = ciphertext (secure default)" || fail "T24: $OUTPUT"
 
-OUTPUT=$(kpm env --from ~/.kpm/templates/shell-env.template --plaintext 2>&1)
+OUTPUT=$(kpm env --from $(kpm_templates)/shell-env.template --plaintext 2>&1)
 echo "$OUTPUT" | grep -q "=" && ! echo "$OUTPUT" | grep -q "ENC\[kpm:" && pass "T25: kpm env --plaintext = raw values" || fail "T25: $OUTPUT"
 
 echo ""
@@ -225,7 +231,7 @@ echo ""
 
 echo "=== Encrypted env + JIT decrypt ==="
 
-eval $(kpm env --from ~/.kpm/templates/shell-env.template --output shell 2>/dev/null)
+eval $(kpm env --from $(kpm_templates)/shell-env.template --output shell 2>/dev/null)
 
 echo "$ANTHROPIC_API_KEY" | grep -q "ENC\[kpm:" && pass "T26: shell env has ciphertext" || fail "T26: env is not ciphertext"
 
