@@ -7,10 +7,10 @@ import (
 	"strings"
 )
 
-// SessionDir returns ~/.kpm/sessions/<id>/
+// SessionDir returns the session directory for a given session ID.
+// Uses XDG-compliant SessionsDir() — see paths.go.
 func SessionDir(sessionID string) string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".kpm", "sessions", sessionID)
+	return filepath.Join(SessionsDir(), sessionID)
 }
 
 // SaveSession persists session key and socket path for later use by kpm run.

@@ -19,10 +19,10 @@ type Config struct {
 	SessionKeyTTL   int    `yaml:"session_key_ttl"`
 }
 
-// DefaultConfigPath returns ~/.kpm/config.yaml.
+// DefaultConfigPath returns the default config file path.
+// Uses XDG-compliant ConfigDir() — see paths.go.
 func DefaultConfigPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".kpm", "config.yaml")
+	return filepath.Join(ConfigDir(), "config.yaml")
 }
 
 // LoadConfig reads and parses a YAML config file. Applies defaults for unset fields.

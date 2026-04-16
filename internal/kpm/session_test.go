@@ -7,11 +7,9 @@ import (
 )
 
 func TestSaveLoadSession(t *testing.T) {
-	// Override home for test
-	origHome := os.Getenv("HOME")
-	tmpHome := t.TempDir()
-	os.Setenv("HOME", tmpHome)
-	defer os.Setenv("HOME", origHome)
+	// Pin KPM_DATA to a temp dir so SessionsDir() is deterministic.
+	tmpData := t.TempDir()
+	t.Setenv("KPM_DATA", tmpData)
 
 	key := []byte("12345678901234567890123456789012") // 32 bytes
 	err := SaveSession("test-session", key, "/tmp/kpm-test.sock")
@@ -20,7 +18,7 @@ func TestSaveLoadSession(t *testing.T) {
 	}
 
 	// Verify files exist with correct permissions
-	dir := filepath.Join(tmpHome, ".kpm", "sessions", "test-session")
+	dir := filepath.Join(tmpData, "sessions", "test-session")
 	keyInfo, err := os.Stat(filepath.Join(dir, "key"))
 	if err != nil {
 		t.Fatal("key file missing:", err)
@@ -49,10 +47,8 @@ func TestSaveLoadSession(t *testing.T) {
 }
 
 func TestLoadSessionMissing(t *testing.T) {
-	origHome := os.Getenv("HOME")
-	tmpHome := t.TempDir()
-	os.Setenv("HOME", tmpHome)
-	defer os.Setenv("HOME", origHome)
+	tmpData := t.TempDir()
+	t.Setenv("KPM_DATA", tmpData)
 
 	_, _, err := LoadSession("nonexistent")
 	if err == nil {

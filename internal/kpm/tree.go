@@ -23,12 +23,11 @@ type TemplateSummary struct {
 // DiscoverTemplateLevels returns the template hierarchy directories.
 // Deduplicates: if two levels resolve to the same path, only the higher-priority one is shown.
 func DiscoverTemplateLevels() []TemplateLevel {
-	home, _ := os.UserHomeDir()
 	cwd, _ := os.Getwd()
 
 	candidates := []TemplateLevel{
 		{Label: "Enterprise", Dir: "/etc/catalyst9/.kpm/templates"},
-		{Label: "User", Dir: filepath.Join(home, ".kpm", "templates")},
+		{Label: "User", Dir: TemplatesDir()},
 		{Label: "Project", Dir: filepath.Join(cwd, ".kpm", "templates")},
 	}
 

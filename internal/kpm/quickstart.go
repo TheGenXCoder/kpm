@@ -22,7 +22,8 @@ func Quickstart(w io.Writer) error {
 		return fmt.Errorf("cannot determine home directory: %w", err)
 	}
 	devDir := filepath.Join(home, ".agentkms", "dev")
-	kpmDir := filepath.Join(home, ".kpm")
+	kpmConfigDir := ConfigDir()
+	kpmDataDir := DataDir()
 
 	// Step 1: Check agentkms-dev is available — build it if not
 	devBin, err := exec.LookPath("agentkms-dev")
@@ -89,11 +90,11 @@ func Quickstart(w io.Writer) error {
 	}
 	fmt.Fprintln(w, "✓ Demo secrets loaded (5 credential paths)")
 
-	// Step 6: Set up ~/.kpm/
+	// Step 6: Set up KPM config and data directories (XDG-compliant)
 	fmt.Fprintln(w, "  Setting up KPM config and templates...")
 
-	// Certs
-	certsDir := filepath.Join(kpmDir, "certs")
+	// Certs (in data dir)
+	certsDir := CertsDir()
 	if err := os.MkdirAll(certsDir, 0700); err != nil {
 		return fmt.Errorf("create certs dir: %w", err)
 	}
@@ -109,31 +110,42 @@ func Quickstart(w io.Writer) error {
 		}
 	}
 
-	// Config
-	configYAML := `server: https://127.0.0.1:8443
-cert: ~/.kpm/certs/client.crt
-key: ~/.kpm/certs/client.key
-ca: ~/.kpm/certs/ca.crt
+	// Ensure config dir exists
+	if err := os.MkdirAll(kpmConfigDir, 0700); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
+	}
+
+	// Config — use actual resolved paths so the file is self-documenting
+	configYAML := fmt.Sprintf(`server: https://127.0.0.1:8443
+cert: %s
+key: %s
+ca: %s
 default_template: .env.template
 secure_mode: false
 session_key_ttl: 3600
-`
-	if err := os.WriteFile(filepath.Join(kpmDir, "config.yaml"), []byte(configYAML), 0600); err != nil {
+`,
+		filepath.Join(kpmDataDir, "certs", "client.crt"),
+		filepath.Join(kpmDataDir, "certs", "client.key"),
+		filepath.Join(kpmDataDir, "certs", "ca.crt"),
+	)
+	if err := os.WriteFile(filepath.Join(kpmConfigDir, "config.yaml"), []byte(configYAML), 0600); err != nil {
 		return fmt.Errorf("write config: %w", err)
 	}
 
-	// User templates (global, in ~/.kpm/templates/)
-	userTmplDir := filepath.Join(kpmDir, "templates")
+	// User templates (global, in config dir / templates/)
+	userTmplDir := TemplatesDir()
 	if err := os.MkdirAll(userTmplDir, 0755); err != nil {
 		return fmt.Errorf("create user templates dir: %w", err)
 	}
 
-	shellEnv := `# Shell environment — add to .zshrc:
-# eval $(kpm env --from ~/.kpm/templates/shell-env.template --output shell 2>/dev/null)
+	shellEnv := fmt.Sprintf(`# Shell environment — add to .zshrc:
+# eval "$(kpm shell-init)"
+# or manually:
+# eval $(kpm env --from %s --output shell 2>/dev/null)
 ANTHROPIC_API_KEY=${kms:llm/anthropic}
 OPENAI_API_KEY=${kms:llm/openai}
 GITHUB_TOKEN=${kms:kv/github#token}
-`
+`, filepath.Join(userTmplDir, "shell-env.template"))
 	if err := os.WriteFile(filepath.Join(userTmplDir, "shell-env.template"), []byte(shellEnv), 0644); err != nil {
 		return fmt.Errorf("write shell-env.template: %w", err)
 	}
@@ -162,13 +174,19 @@ JWT_SECRET=${kms:kv/app/config#jwt_secret}
 	fmt.Fprintf(w, "AgentKMS dev server running at https://127.0.0.1:8443\n")
 	fmt.Fprintf(w, "Server PID: %d  (stop with: kill %d)\n", serverCmd.Process.Pid, serverCmd.Process.Pid)
 	fmt.Fprintln(w, "")
+	fmt.Fprintf(w, "Config: %s\n", filepath.Join(kpmConfigDir, "config.yaml"))
+	fmt.Fprintf(w, "Certs:  %s\n", certsDir)
+	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Try these:")
 	fmt.Fprintln(w, "  kpm tree")
 	fmt.Fprintln(w, "  kpm env --from .kpm/templates/.env.template             # secure (default)")
 	fmt.Fprintln(w, "  kpm env --from .kpm/templates/.env.template --plaintext # raw values")
 	fmt.Fprintln(w, "")
-	fmt.Fprintln(w, "Add to your .zshrc:")
-	fmt.Fprintln(w, `  eval $(kpm env --from ~/.kpm/templates/shell-env.template --output shell 2>/dev/null)`)
+	fmt.Fprintln(w, "Add to your .zshrc / .bashrc:")
+	fmt.Fprintln(w, `  eval "$(kpm shell-init)"`)
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Or for fish shell (~/.config/fish/config.fish):")
+	fmt.Fprintln(w, `  kpm shell-init --shell=fish | source`)
 
 	// Detach the server process so it survives kpm exit
 	serverCmd.Process.Release() //nolint:errcheck

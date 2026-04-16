@@ -21,6 +21,7 @@ const usage = `kpm — secure secrets CLI backed by AgentKMS
 
 Usage:
   kpm quickstart                  Set up local dev environment (no server needed)
+  kpm shell-init                  Shell integration (add to .bashrc/.zshrc)
   kpm add <service/name>          Store a secret in AgentKMS
   kpm list [service]              List secrets in registry
   kpm describe <service/name>     Show secret metadata (never values)
@@ -29,7 +30,7 @@ Usage:
   kpm env [flags]                 Resolve template (secure by default)
   kpm run [flags] -- <cmd> [args] Resolve template and run command with env
   kpm get <ref>                   Fetch a single secret
-  kpm init                        Create ~/.kpm/config.yaml
+  kpm init                        Create config file (XDG-compliant)
   kpm tree                        Show template hierarchy and managed secrets
   kpm show [VAR_NAME]             Show managed secrets in current environment
   kpm config push [dir]           Push templates to AgentKMS (requires agentkms-dev)
@@ -103,6 +104,18 @@ func main() {
 			os.Exit(1)
 		}
 		return
+	case "shell-init":
+		shell := ""
+		for _, arg := range os.Args[2:] {
+			if strings.HasPrefix(arg, "--shell=") {
+				shell = strings.TrimPrefix(arg, "--shell=")
+			}
+		}
+		if err := kpm.ShellInit(os.Stdout, shell); err != nil {
+			fmt.Fprintf(os.Stderr, "shell-init failed: %v\n", err)
+			os.Exit(1)
+		}
+		return
 	case "tree":
 		levels := kpm.DiscoverTemplateLevels()
 		kpm.PrintTree(os.Stdout, levels)
@@ -160,8 +173,6 @@ func main() {
 
 	ctx := context.Background()
 
-	home, _ := os.UserHomeDir()
-
 	switch subcmd {
 	case "init":
 		runInit(*configPath)
@@ -173,7 +184,7 @@ func main() {
 		}
 		switch args[0] {
 		case "push":
-			dir := filepath.Join(home, ".kpm", "templates")
+			dir := kpm.TemplatesDir()
 			if len(args) > 1 {
 				dir = args[1]
 			}
@@ -183,7 +194,7 @@ func main() {
 				os.Exit(1)
 			}
 		case "pull":
-			dir := filepath.Join(home, ".kpm", "templates")
+			dir := kpm.TemplatesDir()
 			if len(args) > 1 {
 				dir = args[1]
 			}
@@ -206,14 +217,28 @@ func main() {
 	case "run":
 		tmplPath := *templateFlag
 		// If no explicit --from, check for active session (ENC blobs in env)
-		// before falling back to default template.
+		// before falling back to auto-discovery and then default template.
 		if tmplPath == "" {
 			if sid, err := kpm.FindActiveSession(); err == nil {
 				// Active session found — use env-scanning mode
 				tmplPath = ""
 				_ = sid // session ID found, runRun will rediscover it
 			} else {
-				tmplPath = cfg.DefaultTemplate
+				// No active session — try auto-discovery by command name
+				cmdArgs := fs.Args()
+				if len(cmdArgs) > 0 {
+					discovered := kpm.DiscoverTemplate(filepath.Base(cmdArgs[0]))
+					if discovered != "" {
+						tmplPath = discovered
+						if *verbose {
+							fmt.Fprintf(os.Stderr, "✓ Auto-discovered template: %s\n", discovered)
+						}
+					}
+				}
+				// Fall back to config default if still not found
+				if tmplPath == "" {
+					tmplPath = cfg.DefaultTemplate
+				}
 			}
 		}
 		cmdArgs := fs.Args()
