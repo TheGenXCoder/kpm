@@ -1,5 +1,15 @@
 # AI coding agents make the secrets problem worse. Here's the fix.
 
+## The core idea in one sentence
+
+**When your AI coding agent runs, it should see the Anthropic key and the project context — not your production database password. Unless you explicitly said so.**
+
+KPM calls this `kpm run --secure`. It's a per-tool allow-list that gives the agent exactly what it needs for this invocation, and nothing else. No persistent plaintext. No inherited prod credentials for every subprocess the agent spawns.
+
+The rest of this post is why that matters, why naive alternatives fail, and what `--secure` looks like in practice.
+
+> **Status note:** v0.1.0 ships `kpm run` (full JIT decrypt for the child) and `kpm run --strict` (per-operation server-side policy). The per-tool allow-list described here — `kpm run --secure` — is the v0.2 direction; the model and UX below are the design we're working to.
+
 ## What changed when Claude started running commands
 
 A year ago, "using an AI coding tool" meant pasting code into a chat window. The AI suggested a diff, you applied it, you ran it. The AI never touched your system. Your secrets were between you and the machine.
@@ -12,22 +22,22 @@ The usual advice — "don't put secrets in env vars" — doesn't work here. The 
 
 So the real question is: **how do you give the AI the one secret it needs without giving it every secret you have?**
 
-## The process tree problem
+## Why the agent inheriting everything is the problem
 
-Here's a mental model that helps. When you run `claude "fix the failing test"`, the process tree looks something like:
+When you run `claude "fix the failing test"`, the agent doesn't do the work alone. It spawns subprocesses:
 
 ```
-zsh (your shell, holds all your env vars)
-└── claude (AI agent, reads ANTHROPIC_API_KEY)
-    ├── go test (spawned by AI to run the test)
-    ├── docker ps (spawned by AI to check state)
-    ├── gh pr view (spawned by AI to check context)
-    └── vim (spawned by AI to edit a file)
+zsh (your shell, full secret environment)
+└── claude
+    ├── go test        (spawned to run the failing test)
+    ├── docker ps      (spawned to check container state)
+    ├── gh pr view     (spawned to check PR context)
+    └── vim            (spawned to edit the fix)
 ```
 
-Every child process — `go test`, `docker ps`, `gh pr view`, `vim` — inherits the full env from `claude`, which inherited the full env from `zsh`. If any one of those tools has a plugin that exfiltrates env vars (a compromised VS Code extension, a malicious npm postinstall, a supply-chain-compromised helper binary), your AWS keys are gone. And the AI doesn't *need* those AWS keys — it only needs `ANTHROPIC_API_KEY` to talk to Anthropic's API.
+Every one of those child processes inherits the full environment from `claude`. If any single one has a compromised plugin — a VS Code extension, an npm postinstall, a supply-chain-compromised helper — your AWS keys are gone. The agent didn't need those AWS keys to fix the test. But every process it spawned got them anyway, because that's how unix environment inheritance works.
 
-The unix model treats the process tree as a single trust domain. That's fine when you wrote every binary. It's not fine when a "smart" process is deciding what other binaries to run.
+This is the kind of problem that `--secure` was built to solve.
 
 ## The obvious-but-wrong answer: shell wrappers
 
