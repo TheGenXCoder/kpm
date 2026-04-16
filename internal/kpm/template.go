@@ -204,19 +204,25 @@ func ResolveProfileVarsInEntries(entries []TemplateEntry, profile Profile) ([]Te
 	copy(result, entries)
 
 	for i, e := range result {
-		if !e.IsKMSRef {
-			continue
+		if e.IsKMSRef {
+			resolvedPath, err := profile.Resolve(e.Ref.Path)
+			if err != nil {
+				return nil, fmt.Errorf("entry %q path: %w", e.EnvKey, err)
+			}
+			resolvedKey, err := profile.Resolve(e.Ref.Key)
+			if err != nil {
+				return nil, fmt.Errorf("entry %q key: %w", e.EnvKey, err)
+			}
+			result[i].Ref.Path = resolvedPath
+			result[i].Ref.Key = resolvedKey
+		} else {
+			// Plain value — resolve profile variables in the value itself.
+			resolvedValue, err := profile.Resolve(string(e.PlainValue))
+			if err != nil {
+				return nil, fmt.Errorf("entry %q value: %w", e.EnvKey, err)
+			}
+			result[i].PlainValue = []byte(resolvedValue)
 		}
-		resolvedPath, err := profile.Resolve(e.Ref.Path)
-		if err != nil {
-			return nil, fmt.Errorf("entry %q path: %w", e.EnvKey, err)
-		}
-		resolvedKey, err := profile.Resolve(e.Ref.Key)
-		if err != nil {
-			return nil, fmt.Errorf("entry %q key: %w", e.EnvKey, err)
-		}
-		result[i].Ref.Path = resolvedPath
-		result[i].Ref.Key = resolvedKey
 	}
 	return result, nil
 }
