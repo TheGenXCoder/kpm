@@ -101,8 +101,9 @@ echo ""
 # ─── QUICKSTART ───────────────────────────────────────────────────────────────
 
 echo "=== Running kpm quickstart ==="
-kpm quickstart 2>&1 | tail -3
-sleep 2
+kpm quickstart 2>/tmp/qs-log
+cat /tmp/qs-log | tail -3
+sleep 3
 
 if curl -sk --cert "$(kpm_certs)/client.crt" --key "$(kpm_certs)/client.key" --cacert "$(kpm_certs)/ca.crt" https://127.0.0.1:8443/healthz 2>/dev/null | grep -q "ok"; then
     pass "AgentKMS dev server running + healthy"
