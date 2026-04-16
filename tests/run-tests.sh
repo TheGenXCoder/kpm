@@ -338,14 +338,8 @@ echo "included-db-password" | kpm add test/db --tags ci 2>&1 > /dev/null
 TEMPLATES_DIR="$(kpm_templates)"
 mkdir -p "$TEMPLATES_DIR"
 
-cat > "$TEMPLATES_DIR/test-base.template" <<'EOF'
-DB_PASSWORD=${kms:test/db}
-EOF
-
-cat > "$TEMPLATES_DIR/test-app.template" <<'EOF'
-${kms:include/test-base}
-APP_NAME=my-service
-EOF
+printf "DB_PASSWORD=\${kms:test/db}\n" > "$TEMPLATES_DIR/test-base.template"
+printf "\${kms:include/test-base}\nAPP_NAME=my-service\n" > "$TEMPLATES_DIR/test-app.template"
 
 # I1: Include pulls in variables from base template
 OUTPUT=$(kpm env --from "$TEMPLATES_DIR/test-app.template" --plaintext 2>&1)
@@ -355,14 +349,8 @@ echo "$OUTPUT" | grep -q "DB_PASSWORD=included-db-password" && pass "I1: include
 echo "$OUTPUT" | grep -q "APP_NAME=my-service" && pass "I2: own variables preserved" || fail "I2: $OUTPUT"
 
 # I3: Circular includes are detected
-cat > "$TEMPLATES_DIR/circ-a.template" <<'EOF'
-${kms:include/circ-b}
-A=1
-EOF
-cat > "$TEMPLATES_DIR/circ-b.template" <<'EOF'
-${kms:include/circ-a}
-B=2
-EOF
+printf "\${kms:include/circ-b}\nA=1\n" > "$TEMPLATES_DIR/circ-a.template"
+printf "\${kms:include/circ-a}\nB=2\n" > "$TEMPLATES_DIR/circ-b.template"
 
 OUTPUT=$(kpm env --from "$TEMPLATES_DIR/circ-a.template" --plaintext 2>&1) || true
 echo "$OUTPUT" | grep -qi "circular" && pass "I3: circular include detected" || fail "I3: $OUTPUT"
@@ -385,11 +373,8 @@ profile:
 EOF
 
 # Create a template that uses the profile variable in a secret ref
-# (We'll use it to reference test/db which we added above)
 mkdir -p "$TEMPLATES_DIR"
-cat > "$TEMPLATES_DIR/profile-test.template" <<'EOF'
-TEST_VAR={{profile:testkey}}
-EOF
+printf "TEST_VAR={{profile:testkey}}\n" > "$TEMPLATES_DIR/profile-test.template"
 
 cd "$PROF_TEST"
 
