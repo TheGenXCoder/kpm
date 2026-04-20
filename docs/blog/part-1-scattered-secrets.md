@@ -191,7 +191,7 @@ KPM isn't a SaaS. I won't hold your secrets. AgentKMS runs wherever you run it �
 
 KPM isn't "done." The roadmap:
 
-- **v0.2.0:** Import scanner — `kpm import --scan ~/.config` finds the secrets you already have and offers to move them into the registry. This was the original hook of the project. It was big enough to deserve its own release.
+- **v0.3.0:** Dynamic Secrets engine (AgentKMS mints scoped, short-lived credentials), Plugin architecture via `hashicorp/go-plugin`, MCP server for AI tool integration, and `kpm run --secure` per-tool allow-lists for agentic workflows. Import scanner — `kpm import --scan ~/.config` — also ships here.
 - **Windows support.** The Unix domain socket JIT decrypt won't port cleanly. Named pipes probably. Research needed.
 - **Release binaries.** Currently the install builds from source (needs Go). Binaries eliminate that step.
 
@@ -210,4 +210,4 @@ File issues, break things, tell me what's wrong. This is the first public releas
 
 ---
 
-**Part 2 of this series:** why your `.env` files are a liability even if they never leave your machine, and what ciphertext-by-default actually buys you.
+**This is Part 1 of a 7-part series.** Part 2: why your `.env` files are a liability even if they never leave your machine, and what ciphertext-by-default actually buys you.

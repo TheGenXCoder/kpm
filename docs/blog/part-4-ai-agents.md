@@ -8,7 +8,7 @@ KPM calls this `kpm run --secure`. It's a per-tool allow-list that gives the age
 
 The rest of this post is why that matters, why naive alternatives fail, and what `--secure` looks like in practice.
 
-> **Status note:** v0.1.0 ships `kpm run` (full JIT decrypt for the child) and `kpm run --strict` (per-operation server-side policy). The per-tool allow-list described here — `kpm run --secure` — is the v0.2 direction; the model and UX below are the design we're working to.
+> **Status note:** v0.1.0 ships `kpm run` (full JIT decrypt for the child) and `kpm run --strict` (per-operation server-side policy). The per-tool allow-list described here — `kpm run --secure` — ships in v0.3, alongside the Dynamic Secrets engine and MCP server integration.
 
 ## What changed when Claude started running commands
 
@@ -248,4 +248,6 @@ Repo: [github.com/TheGenXCoder/kpm](https://github.com/TheGenXCoder/kpm)
 
 ---
 
-That's the four-part series. If you want to go deeper, the threat model is in [SECURITY.md](https://github.com/TheGenXCoder/kpm/blob/main/SECURITY.md) and the contributing guide (with the list of security-sensitive areas where extra-careful review applies) is in [CONTRIBUTING.md](https://github.com/TheGenXCoder/kpm/blob/main/CONTRIBUTING.md).
+That's Part 4 of a 7-part series. **Part 5** goes deeper on Dynamic Secrets: how AgentKMS mints scoped, short-lived credentials on demand so the AI agent never holds a long-lived key at all.
+
+For further reading: the threat model is in [SECURITY.md](https://github.com/TheGenXCoder/kpm/blob/main/SECURITY.md), the contributing guide (with the list of security-sensitive areas where extra-careful review applies) is in [CONTRIBUTING.md](https://github.com/TheGenXCoder/kpm/blob/main/CONTRIBUTING.md), and the v0.3 design records live in [docs/decisions/](https://github.com/TheGenXCoder/kpm/tree/main/docs/decisions/).
