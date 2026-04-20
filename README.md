@@ -328,6 +328,26 @@ kpm run -- terraform apply
 
 ---
 
+## v0.3 Capabilities
+
+### Dynamic Secrets
+
+AgentKMS mints scoped, short-lived credentials on demand. Your AI agent gets a 15-minute token for exactly what it needs — never your master key. Credentials expire automatically; no manual rotation. See [Part 5](docs/blog/part-5-dynamic-secrets.md).
+
+### MCP Integration
+
+AI tools (Claude, Codex, etc.) connect to AgentKMS via the [Model Context Protocol](https://modelcontextprotocol.io). The MCP server exposes credential operations as tools — agents can request secrets through a structured interface without touching your shell environment. Combine with `kpm run --secure` allow-lists (Part 4) to control exactly which secrets each tool can see.
+
+### Forensics Chain-of-Custody
+
+Every credential access produces a tamper-evident audit record: who, what, when, from where. When a key leaks, you know which agent used it, in which session, at which timestamp — in seconds. See [Part 6](docs/blog/part-6-forensics.md).
+
+### Plugin Architecture
+
+Extend KPM without forking. Plugins hook into the request pipeline as Go shared libraries — add custom secret backends, approval workflows, or policy engines. See [Part 7](docs/blog/part-7-plugin-model.md).
+
+---
+
 ## All Commands
 
 | Command | Description |
@@ -341,6 +361,7 @@ kpm run -- terraform apply
 | `kpm remove <service/name>` | Soft-delete (`--purge` for hard delete) |
 | `kpm env --from <template>` | Resolve template (secure by default, `--plaintext` to opt out) |
 | `kpm run -- <cmd> [args]` | Run command with decrypted secrets |
+| `kpm run --secure -- <cmd> [args]` | Run with per-tool allow-list (only listed env vars decrypted) |
 | `kpm show [VAR]` | Inspect managed secrets in current env |
 | `kpm tree` | Show template hierarchy |
 | `kpm decrypt <blob>` | JIT decrypt a single blob (inside `kpm run` context) |
@@ -363,27 +384,33 @@ kpm run -- your-app                             # decrypt for one process
 ## Architecture
 
 ```
-  kpm add / kpm env / kpm run
-          |
-          | mTLS (mutual TLS)
-          v
-    AgentKMS Server
-          |
-          v
-    Secret Backends (dev encrypted file, OpenBao, enterprise vaults)
-          |
-          v
-    AES-256-GCM session encryption
-          |
-          v
-    ENC[kpm:...] ciphertext in environment
-          |
-          | Unix domain socket (local only, 0600 permissions)
-          v
-    JIT decrypt at moment of use
+  kpm add / kpm env / kpm run          AI tools (Claude, Codex, etc.)
+          |                                       |
+          | mTLS (mutual TLS)          MCP protocol (Model Context Protocol)
+          |                                       |
+          +-------------------+-------------------+
+                              |
+                        AgentKMS Server
+                         |         |
+               Plugins --+         +-- Dynamic Secrets
+               (extend without        (scoped, short-lived
+                forking)               credentials minted per request)
+                              |
+                    Secret Backends
+               (dev encrypted file, OpenBao, enterprise vaults)
+                              |
+                    AES-256-GCM session encryption
+                              |
+                    ENC[kpm:...] ciphertext in environment
+                              |
+                  Unix domain socket (local only, 0600 permissions)
+                              |
+                    JIT decrypt at moment of use
+                              |
+                    Forensics audit log (tamper-evident chain-of-custody)
 ```
 
-KPM is the local client. [AgentKMS](https://github.com/TheGenXCoder/agentkms) is the server. In dev mode, `kpm quickstart` runs both. In production, AgentKMS runs on your infrastructure with OpenBao or enterprise vault backends.
+KPM is the local client. [AgentKMS](https://github.com/TheGenXCoder/agentkms) is the server. In dev mode, `kpm quickstart` runs both. In production, AgentKMS runs on your infrastructure with OpenBao or enterprise vault backends. AI tools connect via the MCP server — they request credentials, AgentKMS mints scoped short-lived tokens, and every access is logged to the forensics chain.
 
 ---
 
@@ -432,11 +459,18 @@ curl -sL https://raw.githubusercontent.com/TheGenXCoder/kpm/main/tests/run-tests
 
 ## Roadmap
 
-- **v0.2.0** — Import scanner: `kpm import --scan ~/.config` finds secrets in your files, offers to secure them
+Shipped in v0.3:
+- Dynamic Secrets — AgentKMS mints scoped, short-lived credentials (see [Part 5](docs/blog/part-5-dynamic-secrets.md))
+- MCP server — AI tools connect to AgentKMS via the Model Context Protocol
+- Forensics chain-of-custody — full audit trail with tamper-evident log (see [Part 6](docs/blog/part-6-forensics.md))
+- Plugin architecture — extend KPM without forking (see [Part 7](docs/blog/part-7-plugin-model.md))
+- `kpm run --secure` allow-lists — per-tool env filtering (see [Part 4](docs/blog/part-4-ai-agents.md))
+
+Coming up:
+- **Import scanner** — `kpm import --scan ~/.config` finds secrets in your files, offers to secure them
 - **ABAC policy** — Time-based, network-based, and tag-based access rules
-- **`kpm run --secure` allow-lists** — per-tool env filtering (see [Part 4](docs/blog/part-4-ai-agents.md))
 - **Split knowledge** — PCI-DSS dual-control: N-of-M authorization for sensitive secrets
-- **Windows support** — planned post-v0.2.0
+- **Windows support**
 
 ---
 
@@ -447,6 +481,9 @@ curl -sL https://raw.githubusercontent.com/TheGenXCoder/kpm/main/tests/run-tests
 - [**Part 2: Your .env files are a liability**](docs/blog/part-2-env-files-liability.md) — ciphertext-by-default and JIT decrypt
 - [**Part 3: One template tree, twelve clients, zero friction**](docs/blog/part-3-multi-client.md) — profiles + includes
 - [**Part 4: AI coding agents make the secrets problem worse**](docs/blog/part-4-ai-agents.md) — process-scoped decryption for agentic workflows
+- [**Part 5: Your AI agent gets 15-minute credentials, not your master key**](docs/blog/part-5-dynamic-secrets.md) — dynamic secrets and scoped credential minting
+- [**Part 6: When a credential leaks, you know everything in 30 seconds**](docs/blog/part-6-forensics.md) — forensics chain-of-custody
+- [**Part 7: Go pro for plugins — how AgentKMS stays small and gets big**](docs/blog/part-7-plugin-model.md) — plugin architecture
 
 **Policy:**
 - [**SECURITY.md**](SECURITY.md) — threat model, defended vs not defended, disclosure policy
