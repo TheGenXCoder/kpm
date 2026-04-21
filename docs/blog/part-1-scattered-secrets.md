@@ -2,7 +2,7 @@
 
 ## The inventory
 
-Yesterday I went hunting. I grep'd my home directory for strings that looked like API tokens. Here's where I found my own secrets:
+A few weeks ago I went hunting for an api key I needed. I grep'd my home directory for strings that looked like API tokens. Here's where I found my own secrets:
 
 - Four `.env` files across three projects, two with production DB passwords
 - Three encrypted Obsidian notes with API tokens from 2023
@@ -181,19 +181,28 @@ Short version:
 - **Separated storage.** The metadata endpoint physically cannot return values — it queries a different KV path than the secrets store.
 - **Adversarial tests.** The test suite fuzzes the list/describe/history endpoints with known-plaintext secrets and asserts zero occurrences in the output.
 
-Code coverage: 79.7% on the client, 84.1% on the server's API layer, 95%+ on the crypto module. Not perfect. Better than most.
+Code coverage: 80%+ across all security-critical packages, with enforced minimums (85% on auth, policy, and audit). Adversarial fuzz tests run in CI.
 
 ## What it's not
 
-KPM isn't a replacement for Vault in a mature enterprise with dedicated security engineers. If you have that, you don't need this.
+KPM isn't trying to replace Vault in a mature enterprise with a dedicated platform team and existing HCL policies. If you already have that, KPM complements it. For everyone else — solo developers, small teams, consultants juggling clients — this is the tool that actually fits.
 
 KPM isn't a SaaS. I won't hold your secrets. AgentKMS runs wherever you run it — your laptop, your server, a K3s cluster in your closet.
 
-KPM isn't "done." The roadmap:
+KPM isn't "done," but the foundation is solid. **v0.3** ships:
 
-- **v0.3.0:** Dynamic Secrets engine (AgentKMS mints scoped, short-lived credentials), Plugin architecture via `hashicorp/go-plugin`, MCP server for AI tool integration, and `kpm run --secure` per-tool allow-lists for agentic workflows. Import scanner — `kpm import --scan ~/.config` — also ships here.
-- **Windows support.** The Unix domain socket JIT decrypt won't port cleanly. Named pipes probably. Research needed.
-- **Release binaries.** Currently the install builds from source (needs Go). Binaries eliminate that step.
+- **Dynamic Secrets** — AgentKMS mints scoped, short-lived credentials for AWS STS, GitHub App, and more
+- **Plugin architecture** — extend with Go, Python, Rust, or any language that speaks gRPC (`hashicorp/go-plugin`)
+- **MCP server** — Claude Code, Cursor, and other AI tools connect directly via the Model Context Protocol
+- **Forensics chain-of-custody** — when a credential leaks, one command shows who issued it, who used it, scope, and whether it was already expired
+- **`kpm run --secure`** — per-tool allow-lists so your AI agent only gets the secrets it needs
+- **Prebuilt binaries** — `curl | bash` just works on macOS and Linux, no Go required
+
+On the roadmap:
+- Import scanner — `kpm import --scan ~/.config` finds secrets in your files
+- Windows support (named pipes for the JIT decrypt path)
+- ABAC policy — time-based, network-based access rules
+- Split knowledge — PCI-DSS dual-control for sensitive secrets
 
 ## Try it
 
@@ -206,7 +215,7 @@ kpm list
 
 Star the repo if you want to see where this goes: [github.com/TheGenXCoder/kpm](https://github.com/TheGenXCoder/kpm).
 
-File issues, break things, tell me what's wrong. This is the first public release. The feedback window is now, not three months from now.
+The feedback window is open — file issues, break things, tell me what's wrong.
 
 ---
 
