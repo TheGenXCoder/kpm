@@ -77,6 +77,7 @@ func main() {
 
 	plaintextFlag := fs.Bool("plaintext", false, "output plaintext values (less secure)")
 	strictFlag := fs.Bool("strict", false, "enable strict ciphertext mode")
+	secureFlag := fs.Bool("secure", false, "filter secrets by per-tool allow-list (.kpm/secure-allowlist.yaml)")
 	envFlag := fs.String("env", "", "read ciphertext from this env var name")
 
 	fromFileFlag := fs.String("from-file", "", "read secret value from file")
@@ -255,7 +256,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, "kpm run: no command specified")
 			os.Exit(1)
 		}
-		runRun(ctx, cfg, tmplPath, cmdArgs, *plaintextFlag, *strictFlag, *verbose)
+		runRun(ctx, cfg, tmplPath, cmdArgs, *plaintextFlag, *strictFlag, *secureFlag, *verbose)
 	case "get":
 		args := fs.Args()
 		if len(args) == 0 {
@@ -556,7 +557,19 @@ func runEnv(ctx context.Context, cfg *kpm.Config, tmplPath, format string, plain
 	_ = strict // strict mode reserved for future validation enforcement
 }
 
-func runRun(ctx context.Context, cfg *kpm.Config, tmplPath string, cmdArgs []string, plaintext, strict, verbose bool) {
+func runRun(ctx context.Context, cfg *kpm.Config, tmplPath string, cmdArgs []string, plaintext, strict, secure, verbose bool) {
+	// --secure and --plaintext are mutually exclusive.
+	if secure && plaintext {
+		fmt.Fprintln(os.Stderr, "kpm: --secure and --plaintext are mutually exclusive")
+		os.Exit(1)
+	}
+
+	// --secure requires a template file; env-scan mode is not supported in v0.2.1.
+	if secure && tmplPath == "" {
+		fmt.Fprintln(os.Stderr, "kpm: --secure requires a template file in env-scan mode")
+		os.Exit(1)
+	}
+
 	// Env-scanning mode: no template specified — decrypt ENC blobs from current env.
 	if tmplPath == "" {
 		sid, err := kpm.FindActiveSession()
@@ -616,6 +629,22 @@ func runRun(ctx context.Context, cfg *kpm.Config, tmplPath string, cmdArgs []str
 			kpm.ZeroBytes(resolved[i].PlainValue)
 		}
 	}()
+
+	// Apply per-tool allow-list filtering when --secure is set.
+	if secure {
+		toolName := filepath.Base(cmdArgs[0])
+		allowedVars, alErr := kpm.LoadAllowlist(toolName)
+		if alErr != nil {
+			fmt.Fprintf(os.Stderr, "kpm: %v\n", alErr)
+			os.Exit(1)
+		}
+		if allowedVars == nil {
+			// Tool not in allow-list — warn and filter all KMS secrets.
+			fmt.Fprintf(os.Stderr, "kpm: --secure: tool %q not in allow-list; all secrets filtered\n", toolName)
+			allowedVars = []string{}
+		}
+		resolved = kpm.FilterByAllowlist(resolved, allowedVars, toolName, verbose)
+	}
 
 	kmsCount := 0
 	for _, e := range resolved {
