@@ -4,15 +4,21 @@ All notable changes to KPM are documented here. Format follows [Keep a Changelog
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-04-22
+
 ### Added
-- Blog series (Parts 1-4) describing the design and threat model
+- Blog series (7 parts) describing the design and threat model — live at [blog.catalyst9.ai](https://blog.catalyst9.ai)
+- Comprehensive secret type detection: GitHub tokens, Stripe keys, Slack tokens, AWS access keys, strict JWTs, MongoDB SRV / Redis TLS connection strings, DSA and encrypted PKCS#8 private keys, hex-encoded keys
 - `CONTRIBUTING.md` with security-sensitive areas list
-- GitHub Actions CI: tests with race detector, coverage gate on `internal/kpm`, cross-compile matrix (linux/darwin × amd64/arm64)
-- `scripts/install.sh` now prefers prebuilt release binaries, falling back to source build
 - `SECURITY.md` with threat model and disclosure policy
+- GitHub Actions CI: `go vet`, race-detector tests, 75% coverage gate on `internal/kpm`, cross-compile matrix (linux/darwin × amd64/arm64)
+- `scripts/install.sh` prefers prebuilt release binaries; source build as fallback
+- `--source-only` flag to skip prebuilt download
 
 ### Changed
-- Error messages now parse server JSON responses and include operation context (`write cloudflare/dns-token: denied: caller lacks secret_write permission (policy_denied)`)
+- Error messages parse server JSON responses and include operation context (`write cloudflare/dns-token: denied: caller lacks secret_write permission (policy_denied)`)
+- `install.sh` default `KPM_RELEASE_TAG` bumped to `v0.2.0`
+- Recommended minimum server: AgentKMS v0.3.0 (v0.2.0 still supported for registry + encrypted-env features only)
 
 ## [0.1.0] — 2026-04-16
 
