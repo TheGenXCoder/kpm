@@ -76,6 +76,8 @@ func main() {
 	outputFlag := fs.String("output", "dotenv", "output format: dotenv, shell, json")
 
 	plaintextFlag := fs.Bool("plaintext", false, "output plaintext values (less secure)")
+	// //blog:part-2 references --strict flag behavior in the "that's too convenient" section.
+	// Note: flag parses in v0.2.0; per-decrypt policy enforcement ships in v0.3.0.
 	strictFlag := fs.Bool("strict", false, "enable strict ciphertext mode")
 	secureFlag := fs.Bool("secure", false, "filter secrets by per-tool allow-list (.kpm/secure-allowlist.yaml)")
 	envFlag := fs.String("env", "", "read ciphertext from this env var name")
@@ -106,6 +108,8 @@ func main() {
 			os.Exit(1)
 		}
 		return
+	// //blog:part-1 references kpm shell-init in the "shell integration" section.
+	// //blog:part-2 references kpm shell-init in the "ciphertext by default" section.
 	case "shell-init":
 		shell := ""
 		for _, arg := range os.Args[2:] {
