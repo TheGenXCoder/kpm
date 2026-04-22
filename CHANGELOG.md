@@ -4,6 +4,20 @@ All notable changes to KPM are documented here. Format follows [Keep a Changelog
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-04-22
+
+### Added
+- `kpm run --secure` — per-tool allow-list filter. Reads `.kpm/secure-allowlist.yaml` (project-local first, then user-global; first-wins, no merge). Only secrets matching the tool's exact env-var list are resolved into the child process environment; everything else is filtered. Tool not in allow-list → warn and run with KMS secrets filtered out. `--secure` without a template is a hard error.
+- `kpm run --strict` — **real implementation** (v0.2.0 shipped the flag as a parse-only stub). Strict mode holds no session key and performs no local decryption; each UDS decrypt request round-trips to AgentKMS over mTLS. Blobs encode `KMSReference` as base64-JSON, not ciphertext. Session TTL is irrelevant in strict mode. `--strict + --plaintext` → hard error.
+- `--strict` + `--secure` compose: secure filters first, strict wraps what survives.
+- `//blog:part-N` cross-reference annotations on CLI flag definitions and shell-init wiring (feeds the blog-vs-code drift CI in the blog repo).
+
+### Changed
+- `install.sh` default `KPM_RELEASE_TAG` bumped to `v0.2.1`.
+
+### Security
+- Independent code review completed on `--secure` and `--strict`; both approved. Strict-mode blob format verified to contain no secret material.
+
 ## [0.2.0] — 2026-04-22
 
 ### Added
