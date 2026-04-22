@@ -426,6 +426,12 @@ func buildClient(cfg *kpm.Config) *kpm.Client {
 }
 
 func runEnv(ctx context.Context, cfg *kpm.Config, tmplPath, format string, plaintext bool, strict bool) {
+	// --strict and --plaintext are mutually exclusive.
+	if err := kpm.ValidateStrictFlags(strict, plaintext); err != nil {
+		fmt.Fprintf(os.Stderr, "kpm: %v\n", err)
+		os.Exit(1)
+	}
+
 	profile, _ := kpm.LoadProfile()
 
 	entries, err := kpm.ResolveTemplateWithIncludes(tmplPath, profile, nil)
@@ -461,8 +467,77 @@ func runEnv(ctx context.Context, cfg *kpm.Config, tmplPath, format string, plain
 	var sessionID string
 	var sockPath string
 
-	if !plaintext {
-		// Secure mode (default): encrypt values with a session key, then fork
+	if strict {
+		// Strict mode: encode KMSReference blobs — no plaintext or session key held locally.
+		// The background listener will call AgentKMS on each decrypt request.
+		ttl := cfg.SessionKeyTTL
+		if ttl <= 0 {
+			ttl = 300
+		}
+		// Derive a unique session ID (no session key needed in strict mode).
+		randKey, randErr := kpm.NewSessionKey()
+		if randErr != nil {
+			fmt.Fprintf(os.Stderr, "error generating session ID: %v\n", randErr)
+			os.Exit(1)
+		}
+		sessionID = fmt.Sprintf("strict-%x", randKey[:4])
+		kpm.ZeroBytes(randKey)
+
+		sockPath = filepath.Join(os.TempDir(), fmt.Sprintf("kpm-%s.sock", sessionID))
+
+		for i := range resolved {
+			if !resolved[i].IsKMSRef {
+				continue
+			}
+			// Encode the KMSReference — no ciphertext, no session key.
+			blob, blobErr := kpm.FormatStrictBlob(sessionID, resolved[i].Ref)
+			if blobErr != nil {
+				fmt.Fprintf(os.Stderr, "error encoding strict blob for %s: %v\n", resolved[i].EnvKey, blobErr)
+				os.Exit(1)
+			}
+			kpm.ZeroBytes(resolved[i].PlainValue)
+			resolved[i].PlainValue = []byte(blob)
+		}
+
+		// Fork a background strict listener process.
+		// No session key via stdin — it will re-authenticate with AgentKMS per decrypt.
+		listenerArgs := []string{"_listen",
+			"--session", sessionID,
+			"--socket", sockPath,
+			"--ttl", fmt.Sprintf("%d", ttl),
+			"--strict",
+			"--server", cfg.Server,
+		}
+		if cfg.Cert != "" {
+			listenerArgs = append(listenerArgs, "--cert", cfg.Cert)
+		}
+		if cfg.Key != "" {
+			listenerArgs = append(listenerArgs, "--key", cfg.Key)
+		}
+		if cfg.CA != "" {
+			listenerArgs = append(listenerArgs, "--ca", cfg.CA)
+		}
+		listenerCmd := exec.Command(os.Args[0], listenerArgs...)
+		listenerCmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		if startErr := listenerCmd.Start(); startErr != nil {
+			fmt.Fprintf(os.Stderr, "error starting strict listener: %v\n", startErr)
+			os.Exit(1)
+		}
+		listenerCmd.Process.Release()
+
+		// Wait briefly for the socket to appear.
+		for i := 0; i < 100; i++ {
+			if _, statErr := os.Stat(sockPath); statErr == nil {
+				break
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+
+		fmt.Fprintf(os.Stderr, "✓ Resolved %d secrets from AgentKMS\n", kmsCount)
+		fmt.Fprintf(os.Stderr, "✓ Strict mode: per-decrypt mTLS round-trip (session: %s, TTL: %ds)\n", sessionID, ttl)
+		fmt.Fprintf(os.Stderr, "✓ Decrypt listener: %s\n", sockPath)
+	} else if !plaintext {
+		// Default secure mode: encrypt values with a session key, then fork
 		// a background listener so that subsequent kpm run calls can decrypt.
 		sk, err := kpm.NewSessionKey()
 		if err != nil {
@@ -557,14 +632,18 @@ func runEnv(ctx context.Context, cfg *kpm.Config, tmplPath, format string, plain
 		fmt.Fprintf(os.Stderr, "error writing output: %v\n", err2)
 		os.Exit(1)
 	}
-
-	_ = strict // strict mode reserved for future validation enforcement
 }
 
 func runRun(ctx context.Context, cfg *kpm.Config, tmplPath string, cmdArgs []string, plaintext, strict, secure, verbose bool) {
 	// --secure and --plaintext are mutually exclusive.
 	if secure && plaintext {
 		fmt.Fprintln(os.Stderr, "kpm: --secure and --plaintext are mutually exclusive")
+		os.Exit(1)
+	}
+
+	// --strict and --plaintext are mutually exclusive.
+	if err := kpm.ValidateStrictFlags(strict, plaintext); err != nil {
+		fmt.Fprintf(os.Stderr, "kpm: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -657,7 +736,66 @@ func runRun(ctx context.Context, cfg *kpm.Config, tmplPath string, cmdArgs []str
 		}
 	}
 
-	if !plaintext {
+	if strict {
+		// Strict mode: encode KMSReference blobs; listener round-trips to AgentKMS per decrypt.
+		// --secure filter has already been applied above; strict wraps what remains.
+		randKey, randErr := kpm.NewSessionKey()
+		if randErr != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", randErr)
+			os.Exit(1)
+		}
+		sessionID := fmt.Sprintf("strict-%x", randKey[:4])
+		kpm.ZeroBytes(randKey)
+
+		ttl := time.Duration(cfg.SessionKeyTTL) * time.Second
+
+		for i := range resolved {
+			if !resolved[i].IsKMSRef {
+				continue
+			}
+			blob, blobErr := kpm.FormatStrictBlob(sessionID, resolved[i].Ref)
+			if blobErr != nil {
+				fmt.Fprintf(os.Stderr, "error encoding strict blob for %s: %v\n", resolved[i].EnvKey, blobErr)
+				os.Exit(1)
+			}
+			kpm.ZeroBytes(resolved[i].PlainValue)
+			resolved[i].PlainValue = []byte(blob)
+		}
+
+		sockPath := filepath.Join(os.TempDir(), fmt.Sprintf("kpm-%s.sock", sessionID))
+		dl := &kpm.DecryptListener{
+			SocketPath:     sockPath,
+			SessionID:      sessionID,
+			ExpiresAt:      time.Now().Add(ttl),
+			StrictMode:     true,
+			AgentKMSClient: client,
+		}
+		defer dl.Close()
+
+		go func() {
+			if err := dl.Serve(); err != nil {
+				fmt.Fprintf(os.Stderr, "strict listener error: %v\n", err)
+			}
+		}()
+
+		for i := 0; i < 50; i++ {
+			if _, statErr := os.Stat(sockPath); statErr == nil {
+				break
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+
+		resolved = append(resolved, kpm.ResolvedEntry{
+			EnvKey:     "KPM_DECRYPT_SOCK",
+			PlainValue: []byte(sockPath),
+		})
+
+		if verbose {
+			fmt.Fprintf(os.Stderr, "✓ Resolved %d secrets from AgentKMS\n", kmsCount)
+			fmt.Fprintf(os.Stderr, "✓ Strict mode: per-decrypt mTLS round-trip (session: %s, TTL: %ds)\n", sessionID, cfg.SessionKeyTTL)
+			fmt.Fprintf(os.Stderr, "✓ Decrypt listener started (socket: %s)\n", sockPath)
+		}
+	} else if !plaintext {
 		sk, err := kpm.NewSessionKey()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -833,24 +971,55 @@ session_key_ttl: 300
 
 // runListen is the hidden _listen subcommand. It reads the session key from
 // stdin (never from the command line) and serves decrypt requests until TTL.
+// In strict mode (--strict flag), no session key is read from stdin; instead
+// an AgentKMS client is constructed from the provided --server/--cert/--key/--ca
+// flags and the listener calls AgentKMS per decrypt request.
 func runListen() {
 	fs := flag.NewFlagSet("_listen", flag.ExitOnError)
 	sessionFlag := fs.String("session", "", "session ID")
 	socketFlag := fs.String("socket", "", "socket path")
 	ttlFlag := fs.Int("ttl", 300, "TTL in seconds")
+	strictFlag := fs.Bool("strict", false, "strict mode: per-decrypt AgentKMS round-trip")
+	serverFlag := fs.String("server", "", "AgentKMS server URL (strict mode)")
+	certFlag := fs.String("cert", "", "mTLS client cert path (strict mode)")
+	keyFlag := fs.String("key", "", "mTLS client key path (strict mode)")
+	caFlag := fs.String("ca", "", "CA cert path (strict mode)")
 	fs.Parse(os.Args[2:])
 
 	if *sessionFlag == "" || *socketFlag == "" {
 		os.Exit(1)
 	}
 
-	// Read session key from stdin — never exposed on command line.
+	ttl := time.Duration(*ttlFlag) * time.Second
+
+	if *strictFlag {
+		// Strict mode: no session key from stdin; construct AgentKMS client.
+		var agentClient *kpm.Client
+		if *serverFlag != "" {
+			var clientErr error
+			agentClient, clientErr = kpm.NewClient(*serverFlag, *caFlag, *certFlag, *keyFlag)
+			if clientErr != nil {
+				fmt.Fprintf(os.Stderr, "strict listener: error creating AgentKMS client: %v\n", clientErr)
+				os.Exit(1)
+			}
+		}
+
+		dl := &kpm.DecryptListener{
+			SocketPath:     *socketFlag,
+			SessionID:      *sessionFlag,
+			ExpiresAt:      time.Now().Add(ttl),
+			StrictMode:     true,
+			AgentKMSClient: agentClient,
+		}
+		dl.Serve() //nolint:errcheck
+		return
+	}
+
+	// Non-strict: read session key from stdin — never exposed on command line.
 	key, err := io.ReadAll(os.Stdin)
 	if err != nil || len(key) != 32 {
 		os.Exit(1)
 	}
-
-	ttl := time.Duration(*ttlFlag) * time.Second
 
 	// Persist session so kpm run can reload it.
 	if saveErr := kpm.SaveSession(*sessionFlag, key, *socketFlag); saveErr != nil {
