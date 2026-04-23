@@ -120,6 +120,7 @@ func dispatchShell(ctx context.Context, args []string) int {
 	paranoid := fs.Bool("paranoid", false, "")
 	jsonOut := fs.Bool("json", false, "")
 	quiet := fs.Bool("quiet", false, "")
+	summary := fs.Bool("summary", false, "")
 	allUsers := fs.Bool("all-users", false, "")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -131,7 +132,7 @@ func dispatchShell(ctx context.Context, args []string) int {
 		fmt.Fprintf(os.Stderr, "kpm scan: %v\n", err)
 		return 2
 	}
-	return writeAndExit(result, *jsonOut, *quiet)
+	return writeAndExit(result, *jsonOut, *quiet, *summary, "shell")
 }
 
 func dispatchFiles(ctx context.Context, args []string) int {
@@ -139,6 +140,7 @@ func dispatchFiles(ctx context.Context, args []string) int {
 	paranoid := fs.Bool("paranoid", false, "")
 	jsonOut := fs.Bool("json", false, "")
 	quiet := fs.Bool("quiet", false, "")
+	summary := fs.Bool("summary", false, "")
 	_ = fs.Bool("recurse", false, "")
 	noRecurse := fs.Bool("no-recurse", false, "")
 	maxDepth := fs.Int("max-depth", 0, "")
@@ -161,7 +163,7 @@ func dispatchFiles(ctx context.Context, args []string) int {
 		fmt.Fprintf(os.Stderr, "kpm scan: %v\n", err)
 		return 2
 	}
-	return writeAndExit(result, *jsonOut, *quiet)
+	return writeAndExit(result, *jsonOut, *quiet, *summary, "files")
 }
 
 func dispatchLogs(ctx context.Context, args []string) int {
@@ -169,6 +171,7 @@ func dispatchLogs(ctx context.Context, args []string) int {
 	paranoid := fs.Bool("paranoid", false, "")
 	jsonOut := fs.Bool("json", false, "")
 	quiet := fs.Bool("quiet", false, "")
+	summary := fs.Bool("summary", false, "")
 	includeNames := fs.Bool("include-names", false, "")
 	follow := fs.Bool("follow", false, "")
 	if err := fs.Parse(args); err != nil {
@@ -188,7 +191,7 @@ func dispatchLogs(ctx context.Context, args []string) int {
 		fmt.Fprintf(os.Stderr, "kpm scan: %v\n", err)
 		return 2
 	}
-	return writeAndExit(result, *jsonOut, *quiet)
+	return writeAndExit(result, *jsonOut, *quiet, *summary, "logs")
 }
 
 func modeFrom(paranoid bool) Mode {
@@ -198,11 +201,16 @@ func modeFrom(paranoid bool) Mode {
 	return ModeDefault
 }
 
-func writeAndExit(r Result, jsonOut, quiet bool) int {
+func writeAndExit(r Result, jsonOut, quiet, summary bool, kind string) int {
 	if !quiet {
-		if jsonOut {
+		switch {
+		case summary && jsonOut:
+			WriteSummaryJSON(os.Stdout, r)
+		case summary:
+			WriteSummaryTable(os.Stdout, r, kind)
+		case jsonOut:
 			WriteJSON(os.Stdout, r)
-		} else {
+		default:
 			WriteTable(os.Stdout, r)
 		}
 	}

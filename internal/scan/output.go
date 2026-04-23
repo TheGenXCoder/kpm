@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
+	"strconv"
 	"text/tabwriter"
 )
 
@@ -106,4 +108,136 @@ func unitLabel(kind string) string {
 		return "log lines"
 	}
 	return "units"
+}
+
+// summaryColumnLabel returns the column header for the source-count column.
+func summaryColumnLabel(kind string) string {
+	switch kind {
+	case "shell":
+		return "PROCESSES"
+	case "files":
+		return "FILES"
+	case "logs":
+		return "LINES"
+	}
+	return "SOURCES"
+}
+
+// sourceID returns a string that uniquely identifies a source within its kind.
+func sourceID(s SourceRef) string {
+	switch v := s.(type) {
+	case ShellRef:
+		return strconv.Itoa(v.PID)
+	case FileRef:
+		return v.Path
+	case LogRef:
+		return strconv.Itoa(v.Line) + "\x00" + v.Path
+	}
+	return fmt.Sprintf("%v", s)
+}
+
+// summaryEntry is one collapsed row for summary output.
+type summaryEntry struct {
+	variable    string
+	preview     string
+	valueLength int
+	sources     int
+}
+
+// buildSummary collapses r.Findings into unique (variable, preview) entries,
+// counting distinct sources per entry, sorted descending by source count.
+func buildSummary(r Result) []summaryEntry {
+	type bucket struct {
+		entry   Finding
+		sources map[string]struct{}
+	}
+	buckets := map[string]*bucket{}
+	var order []string // insertion order for stable key tracking
+
+	for _, f := range r.Findings {
+		key := f.Variable + "\x00" + Redact(f.Value)
+		b, ok := buckets[key]
+		if !ok {
+			b = &bucket{entry: f, sources: map[string]struct{}{}}
+			buckets[key] = b
+			order = append(order, key)
+		}
+		b.sources[sourceID(f.Source)] = struct{}{}
+	}
+
+	entries := make([]summaryEntry, 0, len(order))
+	for _, key := range order {
+		b := buckets[key]
+		entries = append(entries, summaryEntry{
+			variable:    b.entry.Variable,
+			preview:     Redact(b.entry.Value),
+			valueLength: len(b.entry.Value),
+			sources:     len(b.sources),
+		})
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].sources > entries[j].sources
+	})
+	return entries
+}
+
+// WriteSummaryTable formats a collapsed summary as a human-readable table.
+// kind is the scan mode ("shell", "files", "logs"); pass "" to auto-detect.
+//
+// SECURITY: this function receives Finding.Value indirectly through Redact().
+// Raw values are never emitted.
+func WriteSummaryTable(w io.Writer, r Result, kind string) {
+	if len(r.Findings) == 0 {
+		fmt.Fprintf(w, "✓  KPM scan: no exposed secrets found across %d units\n", r.Scanned)
+		return
+	}
+
+	if kind == "" && len(r.Findings) > 0 {
+		kind = r.Findings[0].Source.Kind()
+	}
+
+	entries := buildSummary(r)
+	colLabel := summaryColumnLabel(kind)
+
+	fmt.Fprintf(w, "⚠  KPM scan: %d unique secrets across %d %s (%d total findings)\n\n",
+		len(entries), r.Affected, unitLabel(kind), len(r.Findings))
+
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	fmt.Fprintf(tw, "VARIABLE\tPREVIEW\t%s\n", colLabel)
+	for _, e := range entries {
+		varCol := e.variable
+		if varCol == "" {
+			varCol = "-"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%d\n", varCol, e.preview, e.sources)
+	}
+	tw.Flush()
+}
+
+// WriteSummaryJSON formats a collapsed summary as a JSON document.
+// Raw values are never included.
+func WriteSummaryJSON(w io.Writer, r Result) {
+	entries := buildSummary(r)
+
+	summaryArr := make([]map[string]any, 0, len(entries))
+	for _, e := range entries {
+		summaryArr = append(summaryArr, map[string]any{
+			"variable":     e.variable,
+			"preview":      e.preview,
+			"value_length": e.valueLength,
+			"sources":      e.sources,
+		})
+	}
+
+	doc := map[string]any{
+		"scanned":        r.Scanned,
+		"affected":       r.Affected,
+		"total_findings": len(r.Findings),
+		"unique_secrets": len(entries),
+		"summary":        summaryArr,
+	}
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(doc)
 }

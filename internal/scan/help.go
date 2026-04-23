@@ -21,6 +21,7 @@ GLOBAL OPTIONS
     --paranoid       Enable expanded detection (more findings, more false positives)
     --json           Emit JSON instead of a human-readable table
     --quiet          Suppress stdout; use exit code only
+    --summary        Collapse duplicate findings into unique-secret rows
 
 EXIT STATUS
     0    No exposed secrets found.
@@ -51,6 +52,7 @@ OPTIONS
     --paranoid       Expanded detection rules.
     --json           JSON output.
     --quiet          Exit code only.
+    --summary        Collapse duplicate findings into unique-secret rows.
     --all-users      (Not yet implemented.) Scan all users' processes.
 
 EXIT STATUS
@@ -99,6 +101,7 @@ OPTIONS
     --paranoid          Expanded detection rules.
     --json              JSON output.
     --quiet             Exit code only.
+    --summary           Collapse duplicate findings into unique-secret rows.
 
 EXIT STATUS
     0    No hardcoded secrets found.
@@ -153,6 +156,7 @@ OPTIONS
     --paranoid          Expanded detection rules.
     --json              JSON output.
     --quiet             Exit code only.
+    --summary           Collapse duplicate findings into unique-secret rows.
 
 EXIT STATUS
     0    No leaked secrets found.
