@@ -140,3 +140,23 @@ func TestEntropyDetector_LowEntropyValue_Miss(t *testing.T) {
 		t.Errorf("low-entropy value should not match")
 	}
 }
+
+func TestEntropyDetector_UnicodeRuneLength(t *testing.T) {
+	// A short Unicode string with mostly-unique runes should not
+	// trip the > 4.5 entropy threshold when length is only 20 runes.
+	// This guards against dividing by byte length instead of rune length,
+	// which would incorrectly lower entropy and cause false negatives.
+
+	// 24 unique Unicode chars (48 bytes) — if we divide by 48 we underflow
+	// the threshold; if we divide by 24 (correct) we get the intended entropy.
+	// The goal of the test is to verify correctness of the divisor choice,
+	// not to assert a specific hit/miss — just assert the function doesn't crash
+	// and returns a deterministic value that matches rune-count semantics.
+	unicode24 := "αβγδεζηθικλμνξοπρστυφχψω" // 24 Greek letters
+	got := shannonEntropy(unicode24)
+
+	// Expected entropy for 24 unique equally-likely runes = log2(24) ≈ 4.585
+	if got < 4.5 || got > 4.7 {
+		t.Errorf("expected entropy around log2(24)=4.585, got %f (likely divisor bug)", got)
+	}
+}

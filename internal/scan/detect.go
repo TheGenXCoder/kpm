@@ -109,7 +109,7 @@ func shannonEntropy(s string) float64 {
 	for _, r := range s {
 		counts[r]++
 	}
-	length := float64(len(s))
+	length := float64(len([]rune(s)))
 	var h float64
 	for _, c := range counts {
 		p := float64(c) / length
