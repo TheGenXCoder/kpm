@@ -5,7 +5,13 @@
 // not add code paths that emit Finding.Value.
 package scan
 
-import "context"
+import (
+	"context"
+	"flag"
+	"fmt"
+	"os"
+	"strings"
+)
 
 // Finding is one detected secret. Mode-agnostic.
 type Finding struct {
@@ -75,8 +81,139 @@ type Options struct {
 	Quiet bool
 }
 
-// Dispatch is the top-level entry point. Implemented in a later task.
-func Dispatch(ctx context.Context, args []string) (exitCode int) {
-	// Implemented in Task 7.
-	panic("not implemented")
+// Dispatch parses args after "scan" and routes to the appropriate mode.
+// Returns exit code (0 no findings, 1 findings, 2 error).
+func Dispatch(ctx context.Context, args []string) int {
+	if len(args) == 0 {
+		fmt.Fprint(os.Stderr, HelpText(""))
+		return 2
+	}
+
+	mode := args[0]
+	rest := args[1:]
+
+	for _, a := range rest {
+		if a == "--help" || a == "-h" {
+			fmt.Fprint(os.Stdout, HelpText(mode))
+			return 0
+		}
+	}
+
+	switch mode {
+	case "--help", "-h", "help":
+		fmt.Fprint(os.Stdout, HelpText(""))
+		return 0
+	case "shell":
+		return dispatchShell(ctx, rest)
+	case "files":
+		return dispatchFiles(ctx, rest)
+	case "logs":
+		return dispatchLogs(ctx, rest)
+	default:
+		fmt.Fprintf(os.Stderr, "kpm scan: unknown mode %q\n\n%s", mode, HelpText(""))
+		return 2
+	}
 }
+
+func dispatchShell(ctx context.Context, args []string) int {
+	fs := flag.NewFlagSet("scan shell", flag.ContinueOnError)
+	paranoid := fs.Bool("paranoid", false, "")
+	jsonOut := fs.Bool("json", false, "")
+	quiet := fs.Bool("quiet", false, "")
+	allUsers := fs.Bool("all-users", false, "")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	opts := ShellOptions{Mode: modeFrom(*paranoid), AllUsers: *allUsers}
+	result, err := RunShell(ctx, opts)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "kpm scan: %v\n", err)
+		return 2
+	}
+	return writeAndExit(result, *jsonOut, *quiet)
+}
+
+func dispatchFiles(ctx context.Context, args []string) int {
+	fs := flag.NewFlagSet("scan files", flag.ContinueOnError)
+	paranoid := fs.Bool("paranoid", false, "")
+	jsonOut := fs.Bool("json", false, "")
+	quiet := fs.Bool("quiet", false, "")
+	_ = fs.Bool("recurse", false, "")
+	noRecurse := fs.Bool("no-recurse", false, "")
+	maxDepth := fs.Int("max-depth", 0, "")
+	noGitignore := fs.Bool("no-gitignore", false, "")
+	includeBinary := fs.Bool("include-binary", false, "")
+	var excludes multiString
+	fs.Var(&excludes, "exclude", "")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	opts := FileOptions{
+		Paths: fs.Args(), Mode: modeFrom(*paranoid),
+		NoRecurse: *noRecurse, MaxDepth: *maxDepth,
+		NoGitignore: *noGitignore, IncludeBinary: *includeBinary,
+		Excludes: []string(excludes),
+	}
+	result, err := RunFiles(ctx, opts)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "kpm scan: %v\n", err)
+		return 2
+	}
+	return writeAndExit(result, *jsonOut, *quiet)
+}
+
+func dispatchLogs(ctx context.Context, args []string) int {
+	fs := flag.NewFlagSet("scan logs", flag.ContinueOnError)
+	paranoid := fs.Bool("paranoid", false, "")
+	jsonOut := fs.Bool("json", false, "")
+	quiet := fs.Bool("quiet", false, "")
+	includeNames := fs.Bool("include-names", false, "")
+	follow := fs.Bool("follow", false, "")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	path := ""
+	if pargs := fs.Args(); len(pargs) > 0 {
+		path = pargs[0]
+	}
+	opts := LogOptions{
+		Path: path, Mode: modeFrom(*paranoid),
+		IncludeNames: *includeNames, Follow: *follow,
+	}
+	result, err := RunLogs(ctx, opts)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "kpm scan: %v\n", err)
+		return 2
+	}
+	return writeAndExit(result, *jsonOut, *quiet)
+}
+
+func modeFrom(paranoid bool) Mode {
+	if paranoid {
+		return ModeParanoid
+	}
+	return ModeDefault
+}
+
+func writeAndExit(r Result, jsonOut, quiet bool) int {
+	if !quiet {
+		if jsonOut {
+			WriteJSON(os.Stdout, r)
+		} else {
+			WriteTable(os.Stdout, r)
+		}
+	}
+	if len(r.Findings) > 0 {
+		return 1
+	}
+	return 0
+}
+
+// multiString collects repeatable flag values.
+type multiString []string
+
+func (m *multiString) String() string     { return strings.Join(*m, ",") }
+func (m *multiString) Set(v string) error { *m = append(*m, v); return nil }

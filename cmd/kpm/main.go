@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/TheGenXCoder/kpm/internal/kpm"
+	"github.com/TheGenXCoder/kpm/internal/scan"
 )
 
 const usage = `kpm — secure secrets CLI backed by AgentKMS
@@ -36,6 +37,7 @@ Usage:
   kpm profile                     Show merged profile variables for current directory
   kpm config push [dir]           Push templates to AgentKMS (requires agentkms-dev)
   kpm config pull [dir]           Pull templates from AgentKMS
+  kpm scan <mode>                 Scan for exposed secrets (shell, files, logs)
   kpm version                     Print version
 
 Global flags:
@@ -152,6 +154,8 @@ func main() {
 		// Hidden internal command — started by kpm env to run a persistent listener.
 		runListen()
 		return
+	case "scan":
+		os.Exit(scan.Dispatch(context.Background(), os.Args[2:]))
 	case "env", "export", "run", "get", "init", "decrypt", "config",
 		"add", "list", "describe", "history", "remove":
 		if err := fs.Parse(os.Args[2:]); err != nil {
