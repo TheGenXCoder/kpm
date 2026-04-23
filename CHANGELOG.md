@@ -4,6 +4,29 @@ All notable changes to KPM are documented here. Format follows [Keep a Changelog
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-04-23
+
+### Added
+- `kpm scan` — three-mode secrets scanner with shared detection engine, always-redacted output, and non-zero exit on findings:
+  - `kpm scan shell` — inspect the environment of every process owned by the current user for exposed secrets. Linux reads `/proc/<pid>/environ` directly; macOS parses `ps -E` output.
+  - `kpm scan files [path...]` — recursive filesystem scanner with `.gitignore` respect (single-level), binary-skip via NUL-byte detection, `--max-depth`, `--no-recurse`, `--exclude <glob>`, `--no-gitignore`, `--include-binary`. Detects both `KEY=VALUE`/`key: value`/`"key":"value"` pairs and raw value matches.
+  - `kpm scan logs [path]` — stream scanner for log files or stdin. Value-pattern only by default (log lines rarely have `KEY=` structure); `--include-names` enables structured-log detection. `--follow` for `tail -f` semantics.
+- `--summary` flag on all three scan modes — collapses duplicate findings into unique `(variable, redacted preview)` rows with a count of distinct sources. Typical dev-machine output drops from ~200 rows to ~12-15.
+- `--paranoid` flag — expanded detection (URL-embedded credentials, broader name patterns, Shannon-entropy heuristic on values ≥ 20 chars). Higher false-positive rate; recommended for audits, not CI gates.
+- `--json` and `--quiet` output modes on all three scan modes for dashboards and CI gates respectively.
+- `kpm update` — self-update command that shells out to the canonical install script at `https://kpm.catalyst9.ai/install`. Flags: `--source-only`, `--tag <version>`, `--dir <path>`, `--yes`/`-y`.
+- `kpm-scan-*` help screens modeled on `aws sts --help` — sectioned `NAME`, `SYNOPSIS`, `DESCRIPTION`, `OPTIONS`, `EXIT STATUS`, `EXAMPLES`, `SEE ALSO`.
+
+### Security
+- Non-leak invariant: raw `Finding.Value` is discarded at the detection→output boundary. Regression tests guard all three modes × all three output formats (table, JSON, quiet) — raw canary values must never appear in output.
+- Name-detector deny-list expanded beyond classic shell env (`SSH_AUTH_SOCK`, `GPG_TTY`, `PATH`, etc.) to include per-session identifiers: `STARSHIP_SESSION_KEY`, `TERM_SESSION_ID`, `ITERM_SESSION_ID`, `XDG_SESSION_*`, `DBUS_SESSION_BUS_ADDRESS`, `SSH_AGENT_PID`, `I3SOCK`, `SWAYSOCK`, and similar. These match `*_KEY`/`*_ID` patterns but are random session IDs, not credentials.
+
+### Changed
+- `install.sh` default `KPM_RELEASE_TAG` bumped to `v0.3.0`.
+
+### Fixed
+- Shannon-entropy heuristic in paranoid detection divides by rune count (not byte count) for correct behavior on non-ASCII values.
+
 ## [0.2.1] — 2026-04-22
 
 ### Added
