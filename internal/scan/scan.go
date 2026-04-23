@@ -145,6 +145,7 @@ func dispatchFiles(ctx context.Context, args []string) int {
 	noRecurse := fs.Bool("no-recurse", false, "")
 	maxDepth := fs.Int("max-depth", 0, "")
 	noGitignore := fs.Bool("no-gitignore", false, "")
+	noSkipDirs := fs.Bool("no-skip-dirs", false, "")
 	includeBinary := fs.Bool("include-binary", false, "")
 	var excludes multiString
 	fs.Var(&excludes, "exclude", "")
@@ -155,8 +156,9 @@ func dispatchFiles(ctx context.Context, args []string) int {
 	opts := FileOptions{
 		Paths: fs.Args(), Mode: modeFrom(*paranoid),
 		NoRecurse: *noRecurse, MaxDepth: *maxDepth,
-		NoGitignore: *noGitignore, IncludeBinary: *includeBinary,
-		Excludes: []string(excludes),
+		NoGitignore: *noGitignore, NoSkipDirs: *noSkipDirs,
+		IncludeBinary: *includeBinary,
+		Excludes:      []string(excludes),
 	}
 	result, err := RunFiles(ctx, opts)
 	if err != nil {

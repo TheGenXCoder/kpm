@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -107,6 +108,93 @@ func TestRunFiles_NoRecurse(t *testing.T) {
 	}
 	if len(result.Findings) > 0 {
 		t.Errorf("expected no-recurse to miss nested file, got %d findings", len(result.Findings))
+	}
+}
+
+func TestRunFiles_SkipsNodeModulesByDefault(t *testing.T) {
+	dir := t.TempDir()
+	nm := filepath.Join(dir, "node_modules", "leaky-pkg")
+	if err := os.MkdirAll(nm, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nm, "config.yaml"),
+		[]byte("api_key: sk-proj-verySecretCanaryValue1234567f2a\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// Also put a real finding outside node_modules so we confirm the scan ran.
+	if err := os.WriteFile(filepath.Join(dir, "real.yaml"),
+		[]byte("api_key: sk-proj-verySecretCanaryValue1234567f2a\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := RunFiles(context.Background(), FileOptions{Paths: []string{dir}, Mode: ModeDefault})
+	if err != nil {
+		t.Fatalf("RunFiles: %v", err)
+	}
+
+	// The node_modules finding must NOT appear.
+	for _, f := range result.Findings {
+		fr := f.Source.(FileRef)
+		if strings.Contains(fr.Path, "node_modules") {
+			t.Errorf("node_modules was scanned by default: %s", fr.Path)
+		}
+	}
+
+	// The real.yaml finding SHOULD appear.
+	foundReal := false
+	for _, f := range result.Findings {
+		fr := f.Source.(FileRef)
+		if strings.HasSuffix(fr.Path, "real.yaml") {
+			foundReal = true
+		}
+	}
+	if !foundReal {
+		t.Errorf("expected real.yaml to be scanned, got %d findings", len(result.Findings))
+	}
+}
+
+func TestRunFiles_NoSkipDirsFlag_ScansNodeModules(t *testing.T) {
+	dir := t.TempDir()
+	nm := filepath.Join(dir, "node_modules", "leaky-pkg")
+	_ = os.MkdirAll(nm, 0755)
+	_ = os.WriteFile(filepath.Join(nm, "config.yaml"),
+		[]byte("api_key: sk-proj-verySecretCanaryValue1234567f2a\n"), 0644)
+
+	result, err := RunFiles(context.Background(), FileOptions{
+		Paths: []string{dir}, Mode: ModeDefault, NoSkipDirs: true,
+	})
+	if err != nil {
+		t.Fatalf("RunFiles: %v", err)
+	}
+
+	found := false
+	for _, f := range result.Findings {
+		fr := f.Source.(FileRef)
+		if strings.Contains(fr.Path, "node_modules") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected node_modules to be scanned with --no-skip-dirs, got %d findings", len(result.Findings))
+	}
+}
+
+func TestRunFiles_SkipsGitDirByDefault(t *testing.T) {
+	dir := t.TempDir()
+	gitDir := filepath.Join(dir, ".git")
+	_ = os.MkdirAll(gitDir, 0755)
+	_ = os.WriteFile(filepath.Join(gitDir, "config"),
+		[]byte("[remote \"origin\"]\n\turl = https://user:sk-proj-verySecretCanaryValue1234567f2a@host/x\n"), 0644)
+
+	result, err := RunFiles(context.Background(), FileOptions{Paths: []string{dir}, Mode: ModeDefault})
+	if err != nil {
+		t.Fatalf("RunFiles: %v", err)
+	}
+	for _, f := range result.Findings {
+		fr := f.Source.(FileRef)
+		if strings.Contains(fr.Path, "/.git/") {
+			t.Errorf(".git was scanned by default: %s", fr.Path)
+		}
 	}
 }
 

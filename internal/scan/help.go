@@ -96,6 +96,9 @@ OPTIONS
     --no-recurse        Do not descend into subdirectories.
     --max-depth <n>     Cap recursion depth.
     --no-gitignore      Ignore .gitignore and scan everything.
+    --no-skip-dirs      Scan well-known noise dirs (.git, node_modules,
+                        vendor, target, dist, build, __pycache__, etc.).
+                        Default: skip.
     --include-binary    Scan binary files (default: skip).
     --exclude <glob>    Exclude paths matching glob (repeatable).
     --paranoid          Expanded detection rules.
@@ -128,6 +131,10 @@ EXAMPLES
     Exclude test fixtures:
 
         kpm scan files --exclude 'testdata/**' --exclude '*.test.js'
+
+    Include node_modules and other noise dirs (slow; usually pointless):
+
+        kpm scan files --no-skip-dirs
 
 SEE ALSO
     kpm scan shell      Scan running processes

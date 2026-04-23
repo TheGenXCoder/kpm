@@ -17,8 +17,50 @@ type FileOptions struct {
 	NoRecurse     bool
 	MaxDepth      int
 	NoGitignore   bool
+	NoSkipDirs    bool // disable default skip-dirs list
 	IncludeBinary bool
 	Excludes      []string
+}
+
+// defaultSkipDirs are directory names always skipped by walkPath unless
+// --no-skip-dirs is passed. These are the standard noise directories across
+// common ecosystems: VCS metadata, dependency caches, build outputs, IDE config.
+var defaultSkipDirs = map[string]bool{
+	// Version control
+	".git": true,
+	".svn": true,
+	".hg":  true,
+
+	// Dependency caches
+	"node_modules": true,
+	"vendor":       true,
+	"__pycache__":  true,
+	".venv":        true,
+	"venv":         true,
+	".tox":         true,
+
+	// Build outputs
+	"target":  true, // Rust, Java/Maven
+	"dist":    true,
+	"build":   true,
+	"out":     true,
+	".next":   true,
+	".nuxt":   true,
+	".turbo":  true,
+	".cache":  true,
+
+	// Infrastructure state
+	".terraform": true,
+	".vagrant":   true,
+
+	// IDE/editor
+	".idea":   true,
+	".vscode": true,
+
+	// Test/coverage artifacts
+	"coverage":      true,
+	".nyc_output":   true,
+	".pytest_cache": true,
 }
 
 func RunFiles(ctx context.Context, opts FileOptions) (Result, error) {
@@ -103,6 +145,9 @@ func walkPath(ctx context.Context, scanRoot, current string, depth int, opts Fil
 		}
 		if e.IsDir() {
 			if opts.NoRecurse {
+				continue
+			}
+			if !opts.NoSkipDirs && defaultSkipDirs[e.Name()] {
 				continue
 			}
 			if err := walkPath(ctx, scanRoot, full, depth+1, opts, gi, visit); err != nil {
