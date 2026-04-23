@@ -26,13 +26,42 @@ var namePatternsParanoid = []string{
 }
 
 // nameDenyList contains names that look secret-ish but are known-safe.
-// These are NEVER flagged by the name detector.
+// These are NEVER flagged by the name detector. Covers:
+//   - Existing shell/tool conventions (SSH_AUTH_SOCK, GPG_TTY, PATH, etc.)
+//   - Per-session identifiers that are not secrets (Starship, iTerm, XDG)
+//   - Process/socket references (SSH_AGENT_PID, I3SOCK, SWAYSOCK)
 var nameDenyList = map[string]bool{
+	// Classic shell/tool env
 	"SSH_AUTH_SOCK": true,
 	"GPG_TTY":       true,
 	"LESSKEY":       true,
 	"HISTFILE":      true,
 	"PATH":          true,
+
+	// Session identifiers (not secrets — random per-terminal/per-login IDs)
+	"STARSHIP_SESSION_KEY":     true,
+	"TERM_SESSION_ID":          true,
+	"ITERM_SESSION_ID":         true,
+	"XDG_SESSION_ID":           true,
+	"XDG_SESSION_TYPE":         true,
+	"XDG_SESSION_CLASS":        true,
+	"XDG_SESSION_DESKTOP":      true,
+	"XDG_SEAT":                 true,
+	"DBUS_SESSION_BUS_ADDRESS": true,
+	"DESKTOP_SESSION":          true,
+	"GNOME_DESKTOP_SESSION_ID": true,
+
+	// Socket / process references
+	"SSH_AGENT_PID": true,
+	"I3SOCK":        true,
+	"SWAYSOCK":      true,
+
+	// Editor/shell integration tokens (not leak vectors)
+	"VIMRUNTIME":          true,
+	"COLORTERM":           true,
+	"COMMAND_MODE":        true,
+	"LC_TERMINAL":         true,
+	"LC_TERMINAL_VERSION": true,
 }
 
 // valuePattern pairs a compiled regex with a stable detector ID.

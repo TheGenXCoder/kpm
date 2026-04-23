@@ -35,6 +35,15 @@ func TestNameDetector_HighConfidence_Misses(t *testing.T) {
 		"SHELL",
 		"USER",
 		"TERM",
+		// Session identifiers — not secrets
+		"STARSHIP_SESSION_KEY",
+		"TERM_SESSION_ID",
+		"ITERM_SESSION_ID",
+		"XDG_SESSION_ID",
+		"DBUS_SESSION_BUS_ADDRESS",
+		"SSH_AGENT_PID",
+		"I3SOCK",
+		"SWAYSOCK",
 	}
 	d := NewNameDetector(ModeDefault)
 	for _, name := range cases {
