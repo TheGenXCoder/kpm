@@ -3,3 +3,6 @@ agentkms-dev
 *.exe
 .kpm/
 cov.out
+
+# worktrees for isolated feature work
+.worktrees/
