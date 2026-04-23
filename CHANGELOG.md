@@ -4,6 +4,15 @@ All notable changes to KPM are documented here. Format follows [Keep a Changelog
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-04-23
+
+### Fixed
+- `kpm scan files` no longer hangs on large trees. Added a default skip-dirs list covering VCS (`.git`, `.svn`, `.hg`), dependency caches (`node_modules`, `vendor`, `__pycache__`, `.venv`, `venv`, `.tox`), build outputs (`target`, `dist`, `build`, `out`, `.next`, `.nuxt`, `.turbo`, `.cache`), infra state (`.terraform`, `.vagrant`), IDE (`.idea`, `.vscode`), and test/coverage artifacts (`coverage`, `.nyc_output`, `.pytest_cache`). Opt out with `--no-skip-dirs`.
+- `kpm scan files` no longer infinite-loops on symlink cycles. Walker tracks visited `(device, inode)` pairs and skips re-entry.
+
+### Added
+- `kpm scan files --no-skip-dirs` — disable the default skip list (rarely useful; `node_modules` etc. will be fully scanned).
+
 ## [0.3.0] — 2026-04-23
 
 ### Added

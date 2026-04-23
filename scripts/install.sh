@@ -12,7 +12,7 @@
 #
 # Environment variables:
 #   KPM_INSTALL_DIR  Where to install (default: /usr/local/bin)
-#   KPM_RELEASE_TAG  Which release to pull (default: v0.3.0)
+#   KPM_RELEASE_TAG  Which release to pull (default: v0.3.1)
 #
 # kpm has ONE dependency (yaml.v3). No supply chain bloat.
 # The dev server (agentkms-dev) is built separately by `kpm quickstart` only if needed.
@@ -21,7 +21,7 @@ set -e
 
 REPO="https://github.com/TheGenXCoder/kpm.git"
 BRANCH="main"
-RELEASE_TAG="${KPM_RELEASE_TAG:-v0.3.0}"
+RELEASE_TAG="${KPM_RELEASE_TAG:-v0.3.1}"
 INSTALL_DIR="${KPM_INSTALL_DIR:-/usr/local/bin}"
 BUILD_DIR="$(mktemp -d)"
 SOURCE_ONLY=0
