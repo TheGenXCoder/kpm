@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRunFiles_DetectsCanaryInFile(t *testing.T) {
@@ -215,5 +216,48 @@ func TestRunFiles_Exclude(t *testing.T) {
 		if filepath.Base(filepath.Dir(f.Source.(FileRef).Path)) == "testdata" {
 			t.Errorf("excluded path was scanned: %s", f.Source.(FileRef).Path)
 		}
+	}
+}
+
+func TestRunFiles_SymlinkCycleDoesNotHang(t *testing.T) {
+	dir := t.TempDir()
+	// Create a real file with a secret at the root so we know the scan ran.
+	if err := os.WriteFile(filepath.Join(dir, "real.yaml"),
+		[]byte("api_key: sk-proj-verySecretCanaryValue1234567f2a\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a subdir that symlinks back to the scan root — a classic cycle.
+	sub := filepath.Join(dir, "cycle")
+	if err := os.Symlink(dir, sub); err != nil {
+		t.Skipf("symlinks not supported on this filesystem: %v", err)
+	}
+
+	done := make(chan struct{})
+	var result Result
+	var scanErr error
+	go func() {
+		defer close(done)
+		result, scanErr = RunFiles(context.Background(), FileOptions{
+			Paths: []string{dir}, Mode: ModeDefault,
+		})
+	}()
+
+	select {
+	case <-done:
+		// Good — scan terminated.
+	case <-time.After(5 * time.Second):
+		t.Fatal("scan did not terminate within 5s (symlink cycle not handled)")
+	}
+
+	if scanErr != nil {
+		t.Fatalf("RunFiles error: %v", scanErr)
+	}
+	// We should find at least the one real secret; not an exponential blowup.
+	if len(result.Findings) == 0 {
+		t.Errorf("expected to find real.yaml finding, got 0")
+	}
+	if len(result.Findings) > 10 {
+		t.Errorf("excessive findings suggests cycle wasn't broken: got %d", len(result.Findings))
 	}
 }

@@ -9,7 +9,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 )
+
+type syscallStatT = syscall.Stat_t
 
 type FileOptions struct {
 	Paths         []string
@@ -63,6 +66,26 @@ var defaultSkipDirs = map[string]bool{
 	".pytest_cache": true,
 }
 
+// visitedDirs tracks directories already entered by the walker, keyed by
+// (device, inode) on Unix. Prevents symlink-cycle infinite recursion.
+type visitedDirs struct {
+	seen map[uint64]bool // key: (dev << 32) | ino — cheap hash
+}
+
+func newVisitedDirs() *visitedDirs {
+	return &visitedDirs{seen: map[uint64]bool{}}
+}
+
+// dirInodeKey returns a stable key for a directory's (device, inode) pair,
+// or (0, false) on platforms where we can't extract it (treat as unique).
+func dirInodeKey(info os.FileInfo) (uint64, bool) {
+	stat, ok := info.Sys().(*syscallStatT)
+	if !ok {
+		return 0, false
+	}
+	return (uint64(stat.Dev) << 32) | uint64(stat.Ino), true
+}
+
 func RunFiles(ctx context.Context, opts FileOptions) (Result, error) {
 	if len(opts.Paths) == 0 {
 		opts.Paths = []string{"."}
@@ -75,6 +98,8 @@ func RunFiles(ctx context.Context, opts FileOptions) (Result, error) {
 	var findings []Finding
 	scanned := 0
 	affected := 0
+
+	visited := newVisitedDirs()
 
 	for _, root := range opts.Paths {
 		rootAbs, err := filepath.Abs(root)
@@ -91,7 +116,7 @@ func RunFiles(ctx context.Context, opts FileOptions) (Result, error) {
 			gi, _ = LoadGitignore(rootAbs)
 		}
 
-		err = walkPath(ctx, rootAbs, rootAbs, 0, opts, gi, func(path string) error {
+		err = walkPath(ctx, rootAbs, rootAbs, 0, opts, gi, visited, func(path string) error {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -117,13 +142,17 @@ func RunFiles(ctx context.Context, opts FileOptions) (Result, error) {
 
 var includeBinaryOverride bool
 
-func walkPath(ctx context.Context, scanRoot, current string, depth int, opts FileOptions, gi *Gitignore, visit func(path string) error) error {
+func walkPath(ctx context.Context, scanRoot, current string, depth int, opts FileOptions, gi *Gitignore, visited *visitedDirs, visit func(path string) error) error {
 	info, err := os.Stat(current)
 	if err != nil {
 		return err
 	}
 	if !info.IsDir() {
 		return visit(current)
+	}
+	// Seed visited set for this directory.
+	if key, ok := dirInodeKey(info); ok {
+		visited.seen[key] = true
 	}
 	if opts.MaxDepth > 0 && depth > opts.MaxDepth {
 		return nil
@@ -150,7 +179,17 @@ func walkPath(ctx context.Context, scanRoot, current string, depth int, opts Fil
 			if !opts.NoSkipDirs && defaultSkipDirs[e.Name()] {
 				continue
 			}
-			if err := walkPath(ctx, scanRoot, full, depth+1, opts, gi, visit); err != nil {
+			// Symlink-cycle protection: skip if we've already visited this
+			// directory (by device+inode).
+			if subInfo, err := os.Stat(full); err == nil {
+				if key, ok := dirInodeKey(subInfo); ok {
+					if visited.seen[key] {
+						continue
+					}
+					visited.seen[key] = true
+				}
+			}
+			if err := walkPath(ctx, scanRoot, full, depth+1, opts, gi, visited, visit); err != nil {
 				return err
 			}
 			continue
