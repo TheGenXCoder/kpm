@@ -38,6 +38,7 @@ Usage:
   kpm config push [dir]           Push templates to AgentKMS (requires agentkms-dev)
   kpm config pull [dir]           Pull templates from AgentKMS
   kpm scan <mode>                 Scan for exposed secrets (shell, files, logs)
+  kpm update                      Update kpm to the latest release
   kpm version                     Print version
 
 Global flags:
@@ -98,8 +99,13 @@ func main() {
 	nameFlag := fs.String("name", "", "secret name (alternative to positional path)")
 
 	switch subcmd {
+	case "update":
+		os.Exit(runUpdate(os.Args[2:]))
 	case "version":
 		fmt.Println("kpm", version)
+		if isTerminal(os.Stdout) {
+			fmt.Fprintln(os.Stderr, "Run 'kpm update' to upgrade.")
+		}
 		return
 	case "help", "--help", "-h":
 		fmt.Fprint(os.Stderr, usage)
@@ -1121,3 +1127,153 @@ func runDecrypt(blob string) {
 
 	fmt.Print(resp.Plaintext)
 }
+
+// isTerminal reports whether the given file is a TTY.
+func isTerminal(f *os.File) bool {
+	fi, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return (fi.Mode() & os.ModeCharDevice) != 0
+}
+
+// runUpdate shells out to the canonical install script.
+func runUpdate(args []string) int {
+	sourceOnly := false
+	yes := false
+	tag := ""
+	dir := ""
+
+	i := 0
+	for i < len(args) {
+		a := args[i]
+		switch {
+		case a == "--source-only":
+			sourceOnly = true
+		case a == "--yes" || a == "-y":
+			yes = true
+		case a == "--tag" && i+1 < len(args):
+			tag = args[i+1]
+			i++
+		case strings.HasPrefix(a, "--tag="):
+			tag = strings.TrimPrefix(a, "--tag=")
+		case a == "--dir" && i+1 < len(args):
+			dir = args[i+1]
+			i++
+		case strings.HasPrefix(a, "--dir="):
+			dir = strings.TrimPrefix(a, "--dir=")
+		case a == "--help" || a == "-h":
+			fmt.Fprint(os.Stdout, updateHelp)
+			return 0
+		default:
+			fmt.Fprintf(os.Stderr, "kpm update: unknown arg %q\n\n%s", a, updateHelp)
+			return 2
+		}
+		i++
+	}
+
+	// Pre-flight checks
+	if _, err := exec.LookPath("curl"); err != nil {
+		fmt.Fprintln(os.Stderr, "kpm update: 'curl' not found in PATH")
+		return 2
+	}
+	if _, err := exec.LookPath("bash"); err != nil {
+		fmt.Fprintln(os.Stderr, "kpm update: 'bash' not found in PATH")
+		return 2
+	}
+
+	// Build announcement
+	fmt.Fprintln(os.Stderr, "kpm update will:")
+	fmt.Fprintln(os.Stderr, "  fetch  https://kpm.catalyst9.ai/install")
+	fmt.Fprintln(os.Stderr, "  run it via bash to install the latest kpm binary")
+	if tag != "" {
+		fmt.Fprintf(os.Stderr, "  release tag: %s\n", tag)
+	}
+	if dir != "" {
+		fmt.Fprintf(os.Stderr, "  install dir: %s\n", dir)
+	}
+	if sourceOnly {
+		fmt.Fprintln(os.Stderr, "  source-only mode (requires Go)")
+	}
+
+	if !yes {
+		fmt.Fprint(os.Stderr, "Continue? [Y/n] ")
+		var resp string
+		_, _ = fmt.Fscanln(os.Stdin, &resp)
+		resp = strings.TrimSpace(strings.ToLower(resp))
+		if resp != "" && resp != "y" && resp != "yes" {
+			fmt.Fprintln(os.Stderr, "aborted")
+			return 1
+		}
+	}
+
+	// Execute: curl -fsSL URL | bash -s -- [flags]
+	script := `set -e
+curl -fsSL https://kpm.catalyst9.ai/install | bash -s --`
+	if sourceOnly {
+		script += " --source-only"
+	}
+
+	cmd := exec.Command("bash", "-c", script)
+	if tag != "" {
+		cmd.Env = append(os.Environ(), "KPM_RELEASE_TAG="+tag)
+	} else {
+		cmd.Env = os.Environ()
+	}
+	if dir != "" {
+		cmd.Env = append(cmd.Env, "KPM_INSTALL_DIR="+dir)
+	}
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+	if err := cmd.Run(); err != nil {
+		return 1
+	}
+	return 0
+}
+
+const updateHelp = `NAME
+    kpm-update -- Update kpm to the latest release
+
+SYNOPSIS
+    kpm update [--source-only] [--tag <version>] [--dir <path>] [--yes]
+
+DESCRIPTION
+    Fetches and runs the canonical KPM install script from
+    https://kpm.catalyst9.ai/install. By default the script downloads a
+    prebuilt binary for the current platform and installs it to
+    /usr/local/bin/kpm (override with --dir).
+
+OPTIONS
+    --source-only       Skip the prebuilt binary and build from source.
+                        Requires a Go toolchain.
+    --tag <version>     Install a specific release tag (e.g., v0.3.0).
+                        Default: latest release tracked by the script.
+    --dir <path>        Install into <path> instead of /usr/local/bin.
+    --yes, -y           Don't prompt for confirmation.
+
+EXIT STATUS
+    0    Updated successfully.
+    1    Update failed or user declined.
+    2    Usage error.
+
+EXAMPLES
+    Update to the latest release:
+
+        kpm update
+
+    Pin to a specific version:
+
+        kpm update --tag v0.2.1
+
+    Install into a user-local directory:
+
+        kpm update --dir ~/.local/bin
+
+    Rebuild from source (use main branch):
+
+        kpm update --source-only
+
+SEE ALSO
+    kpm version    Show current version
+`
