@@ -3,6 +3,8 @@ agentkms-dev
 *.exe
 .kpm/
 cov.out
+coverage.out
+.DS_Store
 
 # worktrees for isolated feature work
 .worktrees/
