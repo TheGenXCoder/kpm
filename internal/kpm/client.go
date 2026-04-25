@@ -113,6 +113,15 @@ func newClientWithTLS(baseURL string, tlsCfg *tls.Config) *Client {
 	}
 }
 
+// NewClientInsecure creates an AgentKMS client without mTLS. Only for use in
+// unit tests against httptest.Server. Never use in production.
+func NewClientInsecure(baseURL string) (*Client, error) {
+	return &Client{
+		baseURL:    baseURL,
+		httpClient: &http.Client{Timeout: 10 * time.Second},
+	}, nil
+}
+
 // Authenticate obtains a bearer token via POST /auth/session (mTLS).
 // Called automatically on first request if no token is set.
 func (c *Client) Authenticate(ctx context.Context) error {
@@ -250,6 +259,112 @@ func (c *Client) FetchRegistrySecret(ctx context.Context, path string) (map[stri
 		out[k] = []byte(v)
 	}
 	return out, nil
+}
+
+// ── Binding endpoints ─────────────────────────────────────────────────────────
+
+// RegisterBinding registers (creates or replaces) a credential binding.
+func (c *Client) RegisterBinding(ctx context.Context, b CredentialBinding) (*CredentialBinding, error) {
+	url := c.baseURL + "/bindings"
+	resp, err := c.doPost(ctx, url, b)
+	if err != nil {
+		return nil, fmt.Errorf("register binding: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		return nil, serverError(resp, "register binding "+b.Name)
+	}
+
+	var out CredentialBinding
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("decode register binding response: %w", err)
+	}
+	return &out, nil
+}
+
+// ListBindings returns binding summaries, optionally filtered by tag.
+func (c *Client) ListBindings(ctx context.Context, tag string) ([]BindingSummary, error) {
+	u := c.baseURL + "/bindings"
+	if tag != "" {
+		u += "?tag=" + tag
+	}
+	resp, err := c.doGet(ctx, u)
+	if err != nil {
+		return nil, fmt.Errorf("list bindings: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, serverError(resp, "list bindings")
+	}
+
+	var body struct {
+		Bindings []BindingSummary `json:"bindings"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, fmt.Errorf("decode list bindings response: %w", err)
+	}
+	return body.Bindings, nil
+}
+
+// GetBinding retrieves the full credential binding by name.
+func (c *Client) GetBinding(ctx context.Context, name string) (*CredentialBinding, error) {
+	resp, err := c.doGet(ctx, c.baseURL+"/bindings/"+name)
+	if err != nil {
+		return nil, fmt.Errorf("get binding: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, serverError(resp, "get binding "+name)
+	}
+
+	var out CredentialBinding
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("decode get binding response: %w", err)
+	}
+	return &out, nil
+}
+
+// RotateBinding triggers a manual one-shot rotation for the named binding.
+func (c *Client) RotateBinding(ctx context.Context, name string) (*RotateResponse, error) {
+	resp, err := c.doPost(ctx, c.baseURL+"/bindings/"+name+"/rotate", nil)
+	if err != nil {
+		return nil, fmt.Errorf("rotate binding: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, serverError(resp, "rotate binding "+name)
+	}
+
+	var out RotateResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("decode rotate response: %w", err)
+	}
+	return &out, nil
+}
+
+// RemoveBinding removes a credential binding.
+// If purge is true the binding is hard-deleted; otherwise it is soft-deleted
+// (server semantics may vary — current server implementation always hard-deletes
+// bindings, so purge is a signal for future soft-delete support).
+func (c *Client) RemoveBinding(ctx context.Context, name string, purge bool) error {
+	u := c.baseURL + "/bindings/" + name
+	if purge {
+		u += "?purge=true"
+	}
+	resp, err := c.doDelete(ctx, u)
+	if err != nil {
+		return fmt.Errorf("remove binding: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		return serverError(resp, "remove binding "+name)
+	}
+	return nil
 }
 
 // FetchGeneric retrieves a generic credential set at the given path.

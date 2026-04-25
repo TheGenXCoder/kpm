@@ -37,6 +37,7 @@ Usage:
   kpm profile                     Show merged profile variables for current directory
   kpm config push [dir]           Push templates to AgentKMS (requires agentkms-dev)
   kpm config pull [dir]           Pull templates from AgentKMS
+  kpm cred <subcommand>           Manage credential bindings (register/list/inspect/rotate/remove)
   kpm scan <mode>                 Scan for exposed secrets (shell, files, logs)
   kpm update                      Update kpm to the latest release
   kpm version                     Print version
@@ -55,6 +56,9 @@ Examples:
   kpm list                                        # see all secrets
   kpm list --tag ci                               # filter by tag
   eval $(kpm env --from ~/.kpm/templates/shell-env.template --output shell)
+  kpm cred register blog-audit-pat --provider github-app-token --destination github-secret:owner/repo:PAT
+  kpm cred list
+  kpm cred rotate blog-audit-pat
 `
 
 var version = "dev"
@@ -97,6 +101,43 @@ func main() {
 	jsonFlag := fs.Bool("json", false, "output JSON instead of table (list command)")
 	serviceFlag := fs.String("service", "", "service name (alternative to positional path)")
 	nameFlag := fs.String("name", "", "secret name (alternative to positional path)")
+
+	// kpm cred is dispatched early: it has its own flag parsing and does not
+	// share the global flag set. Route before fs.Parse.
+	if subcmd == "cred" {
+		cfg := &kpm.Config{}
+		if _, err := os.Stat(kpm.DefaultConfigPath()); err == nil {
+			if loaded, loadErr := kpm.LoadConfig(kpm.DefaultConfigPath()); loadErr == nil {
+				cfg = loaded
+			}
+		}
+		// Apply global flag overrides from the remaining args if present.
+		// We do a best-effort parse of --server / --cert / --key / --ca
+		// that appear before the cred subcommand.
+		for i, a := range os.Args[2:] {
+			switch {
+			case a == "--server" && i+1 < len(os.Args[2:]):
+				cfg.Server = os.Args[3+i]
+			case strings.HasPrefix(a, "--server="):
+				cfg.Server = strings.TrimPrefix(a, "--server=")
+			case a == "--cert" && i+1 < len(os.Args[2:]):
+				cfg.Cert = os.Args[3+i]
+			case strings.HasPrefix(a, "--cert="):
+				cfg.Cert = strings.TrimPrefix(a, "--cert=")
+			case a == "--key" && i+1 < len(os.Args[2:]):
+				cfg.Key = os.Args[3+i]
+			case strings.HasPrefix(a, "--key="):
+				cfg.Key = strings.TrimPrefix(a, "--key=")
+			case a == "--ca" && i+1 < len(os.Args[2:]):
+				cfg.CA = os.Args[3+i]
+			case strings.HasPrefix(a, "--ca="):
+				cfg.CA = strings.TrimPrefix(a, "--ca=")
+			}
+		}
+		client := buildClient(cfg)
+		credArgs := os.Args[2:]
+		os.Exit(kpm.RunCred(context.Background(), os.Stdout, os.Stderr, client, credArgs))
+	}
 
 	switch subcmd {
 	case "update":
@@ -171,6 +212,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n\n%s", subcmd, usage)
 		os.Exit(1)
 	}
+	// Note: "cred" is handled above before this switch block.
 
 	cfg := &kpm.Config{}
 	if _, err := os.Stat(*configPath); err == nil {
