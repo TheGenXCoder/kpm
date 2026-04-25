@@ -51,9 +51,13 @@ KPM fixes this in two commands. Your secrets go into one place, encrypted, audit
 curl -sL kpm.catalyst9.ai/install | bash
 
 # Quickstart: generates PKI, starts local AgentKMS, seeds demo secrets,
-# writes config + starter templates. Running in under 30 seconds.
+# writes config + starter templates.
 kpm quickstart
 ```
+
+The full sequence runs in under 30 seconds on a fresh machine.
+
+> **Verifying the install script.** `kpm.catalyst9.ai/install` is a 302 redirect to `raw.githubusercontent.com/TheGenXCoder/kpm/main/scripts/install.sh`. Review it before piping to bash if you'd like: `curl -sL kpm.catalyst9.ai/install | less`. For air-gapped or audit-sensitive environments, download a pinned release binary directly from the [Releases page](https://github.com/TheGenXCoder/kpm/releases) and verify its SHA256 against the release notes.
 
 ### Add your real secrets
 
@@ -62,7 +66,9 @@ kpm quickstart
 kpm add anthropic/api-key --tags dev,ci
 
 # From clipboard
-pbpaste | kpm add github/deploy-pat --tags ci
+pbpaste | kpm add github/deploy-pat --tags ci             # macOS
+xclip -selection clipboard -o | kpm add github/deploy-pat # Linux (X11)
+wl-paste | kpm add github/deploy-pat                      # Linux (Wayland)
 
 # From file
 kpm add ssh/deploy-key --from-file ~/.ssh/deploy_key --description "production deploy"
@@ -98,6 +104,13 @@ KPM organizes secrets by `service/name`. Every write is audited and policy-check
 
 ```bash
 kpm add <service/name>           # Store a secret (interactive, pipe, or --from-file)
+  --tags <a,b,c>                 # Comma-separated tags (e.g. ci, dev, prod)
+  --type <kind>                  # Secret kind: api-token | ssh-key | connection-string
+                                 # | jwt | password | generic. Auto-detected from
+                                 # the value when omitted (e.g. sk- → api-token).
+  --description "..."            # Free-form description (shown by kpm describe)
+  --from-file <path>             # Read value from file instead of prompt/pipe
+  --expires <ISO-8601>           # Set expiry timestamp (informational, not enforced)
 kpm list                         # List all secrets (metadata only — never values)
 kpm list --tag ci                # Filter by tag
 kpm list --json                  # JSON output for scripting
@@ -284,7 +297,7 @@ Reference profile values in any template with `{{profile:key}}`:
 ```bash
 # ~/.config/kpm/templates/claude.template
 ANTHROPIC_API_KEY=${kms:customers/{{profile:customer}}/anthropic-key}
-CLAUDE_MODEL={{profile:model:-claude-opus-4-6}}
+CLAUDE_MODEL={{profile:model:-claude-opus-4-7}}
 ```
 
 In `~/clients/acme/...` this resolves to Acme's Anthropic key. In `~/clients/globex/...` it resolves to Globex's. Same command. Different secrets. No work.
@@ -306,7 +319,7 @@ Circular includes are detected. Include depth is bounded. Missing paths fail lou
 
 Templates control secret access, so walking would be a privilege-escalation vector — a parent directory could silently grant secret access to every project below it. Profiles only contain identifiers that shape paths; they can't add permissions.
 
-See [blog post Part 3](docs/blog/part-3-multi-client.md) for the full story.
+See [blog post Part 3](https://blog.catalyst9.ai/posts/part-3-multi-client/) for the full story.
 
 ---
 
@@ -332,7 +345,7 @@ kpm run -- terraform apply
 
 ### Dynamic Secrets
 
-AgentKMS mints scoped, short-lived credentials on demand. Your AI agent gets a 15-minute token for exactly what it needs — never your master key. Credentials expire automatically; no manual rotation. See [Part 5](docs/blog/part-5-dynamic-secrets.md).
+AgentKMS mints scoped, short-lived credentials on demand. Your AI agent gets a 15-minute token for exactly what it needs — never your master key. Credentials expire automatically; no manual rotation. See [Part 5](https://blog.catalyst9.ai/posts/part-5-dynamic-secrets/).
 
 ### MCP Integration
 
@@ -340,11 +353,11 @@ AI tools (Claude, Codex, etc.) connect to AgentKMS via the [Model Context Protoc
 
 ### Forensics Chain-of-Custody
 
-Every credential access produces a tamper-evident audit record: who, what, when, from where. When a key leaks, you know which agent used it, in which session, at which timestamp — in seconds. See [Part 6](docs/blog/part-6-forensics.md).
+Every credential access produces a tamper-evident audit record: who, what, when, from where. When a key leaks, you know which agent used it, in which session, at which timestamp — in seconds. See [Part 6](https://blog.catalyst9.ai/posts/part-6-forensics/).
 
 ### Plugin Architecture
 
-Extend KPM without forking. Plugins hook into the request pipeline as Go shared libraries — add custom secret backends, approval workflows, or policy engines. See [Part 7](docs/blog/part-7-plugin-model.md).
+Extend KPM without forking. Plugins hook into the request pipeline as Go shared libraries — add custom secret backends, approval workflows, or policy engines. See [Part 7](https://blog.catalyst9.ai/posts/part-7-plugin-model/).
 
 ---
 
@@ -460,11 +473,11 @@ curl -sL https://raw.githubusercontent.com/TheGenXCoder/kpm/main/tests/run-tests
 ## Roadmap
 
 Shipped in v0.3:
-- Dynamic Secrets — AgentKMS mints scoped, short-lived credentials (see [Part 5](docs/blog/part-5-dynamic-secrets.md))
+- Dynamic Secrets — AgentKMS mints scoped, short-lived credentials (see [Part 5](https://blog.catalyst9.ai/posts/part-5-dynamic-secrets/))
 - MCP server — AI tools connect to AgentKMS via the Model Context Protocol
-- Forensics chain-of-custody — full audit trail with tamper-evident log (see [Part 6](docs/blog/part-6-forensics.md))
-- Plugin architecture — extend KPM without forking (see [Part 7](docs/blog/part-7-plugin-model.md))
-- `kpm run --secure` allow-lists — per-tool env filtering (see [Part 4](docs/blog/part-4-ai-agents.md))
+- Forensics chain-of-custody — full audit trail with tamper-evident log (see [Part 6](https://blog.catalyst9.ai/posts/part-6-forensics/))
+- Plugin architecture — extend KPM without forking (see [Part 7](https://blog.catalyst9.ai/posts/part-7-plugin-model/))
+- `kpm run --secure` allow-lists — per-tool env filtering (see [Part 4](https://blog.catalyst9.ai/posts/part-4-ai-agents/))
 
 Coming up:
 - **Import scanner** — `kpm import --scan ~/.config` finds secrets in your files, offers to secure them
@@ -477,13 +490,13 @@ Coming up:
 ## Documentation
 
 **Product narrative:**
-- [**Part 1: I had 47 places I stored secrets**](docs/blog/part-1-scattered-secrets.md) — why KPM exists
-- [**Part 2: Your .env files are a liability**](docs/blog/part-2-env-files-liability.md) — ciphertext-by-default and JIT decrypt
-- [**Part 3: One template tree, twelve clients, zero friction**](docs/blog/part-3-multi-client.md) — profiles + includes
-- [**Part 4: AI coding agents make the secrets problem worse**](docs/blog/part-4-ai-agents.md) — process-scoped decryption for agentic workflows
-- [**Part 5: Your AI agent gets 15-minute credentials, not your master key**](docs/blog/part-5-dynamic-secrets.md) — dynamic secrets and scoped credential minting
-- [**Part 6: When a credential leaks, you know everything in 30 seconds**](docs/blog/part-6-forensics.md) — forensics chain-of-custody
-- [**Part 7: Go pro for plugins — how AgentKMS stays small and gets big**](docs/blog/part-7-plugin-model.md) — plugin architecture
+- [**Part 1: I had 47 places I stored secrets**](https://blog.catalyst9.ai/posts/part-1-scattered-secrets/) — why KPM exists
+- [**Part 2: Your .env files are a liability**](https://blog.catalyst9.ai/posts/part-2-env-files-liability/) — ciphertext-by-default and JIT decrypt
+- [**Part 3: One template tree, twelve clients, zero friction**](https://blog.catalyst9.ai/posts/part-3-multi-client/) — profiles + includes
+- [**Part 4: AI coding agents make the secrets problem worse**](https://blog.catalyst9.ai/posts/part-4-ai-agents/) — process-scoped decryption for agentic workflows
+- [**Part 5: Your AI agent gets 15-minute credentials, not your master key**](https://blog.catalyst9.ai/posts/part-5-dynamic-secrets/) — dynamic secrets and scoped credential minting
+- [**Part 6: When a credential leaks, you know everything in 30 seconds**](https://blog.catalyst9.ai/posts/part-6-forensics/) — forensics chain-of-custody
+- [**Part 7: Go pro for plugins — how AgentKMS stays small and gets big**](https://blog.catalyst9.ai/posts/part-7-plugin-model/) — plugin architecture
 
 **Policy:**
 - [**SECURITY.md**](SECURITY.md) — threat model, defended vs not defended, disclosure policy
