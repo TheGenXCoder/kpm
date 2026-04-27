@@ -38,6 +38,7 @@ Usage:
   kpm config push [dir]           Push templates to AgentKMS (requires agentkms-dev)
   kpm config pull [dir]           Pull templates from AgentKMS
   kpm cred <subcommand>           Manage credential bindings (register/list/inspect/rotate/remove)
+  kpm gh-app <subcommand>         Manage GitHub App installations (register/list/inspect/remove)
   kpm scan <mode>                 Scan for exposed secrets (shell, files, logs)
   kpm update                      Update kpm to the latest release
   kpm version                     Print version
@@ -101,6 +102,41 @@ func main() {
 	jsonFlag := fs.Bool("json", false, "output JSON instead of table (list command)")
 	serviceFlag := fs.String("service", "", "service name (alternative to positional path)")
 	nameFlag := fs.String("name", "", "secret name (alternative to positional path)")
+
+	// kpm gh-app is dispatched early: it has its own flag parsing and does not
+	// share the global flag set. Route before fs.Parse.
+	if subcmd == "gh-app" {
+		cfg := &kpm.Config{}
+		if _, err := os.Stat(kpm.DefaultConfigPath()); err == nil {
+			if loaded, loadErr := kpm.LoadConfig(kpm.DefaultConfigPath()); loadErr == nil {
+				cfg = loaded
+			}
+		}
+		// Best-effort parse of global connection flags before the subcommand.
+		for i, a := range os.Args[2:] {
+			switch {
+			case a == "--server" && i+1 < len(os.Args[2:]):
+				cfg.Server = os.Args[3+i]
+			case strings.HasPrefix(a, "--server="):
+				cfg.Server = strings.TrimPrefix(a, "--server=")
+			case a == "--cert" && i+1 < len(os.Args[2:]):
+				cfg.Cert = os.Args[3+i]
+			case strings.HasPrefix(a, "--cert="):
+				cfg.Cert = strings.TrimPrefix(a, "--cert=")
+			case a == "--key" && i+1 < len(os.Args[2:]):
+				cfg.Key = os.Args[3+i]
+			case strings.HasPrefix(a, "--key="):
+				cfg.Key = strings.TrimPrefix(a, "--key=")
+			case a == "--ca" && i+1 < len(os.Args[2:]):
+				cfg.CA = os.Args[3+i]
+			case strings.HasPrefix(a, "--ca="):
+				cfg.CA = strings.TrimPrefix(a, "--ca=")
+			}
+		}
+		client := buildClient(cfg)
+		ghAppArgs := os.Args[2:]
+		os.Exit(kpm.RunGhApp(context.Background(), os.Stdout, os.Stderr, client, ghAppArgs))
+	}
 
 	// kpm cred is dispatched early: it has its own flag parsing and does not
 	// share the global flag set. Route before fs.Parse.

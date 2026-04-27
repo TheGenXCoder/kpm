@@ -5,6 +5,11 @@
 //	kpm cred register <name> --provider <kind> --provider-params <json>
 //	    --scope <name> --destination <kind>:<target_id>[:<params_json>]
 //	    [--destination ...] [--ttl <seconds>] [--tag <tag>] ...
+//
+//	Sugar flags (mutually exclusive with --provider / --provider-params):
+//	    --github-app <name>              sets provider=github-pat + provider-params={"app_name":"<name>"}
+//	    --target <kind>:<location>:<name> repeatable; sugar for --destination without inline params
+//
 //	kpm cred list [--tag <tag>]
 //	kpm cred inspect <name> [--json]
 //	kpm cred rotate <name>
@@ -129,14 +134,26 @@ Usage:
   kpm cred register <name> --provider <kind> --provider-params <json>
       --scope <scope-kind> --destination <kind>:<target_id>[:<params_json>]
       [--destination ...] [--ttl <seconds>] [--tag <tag>] [--manual-only]
+
+  Sugar (GitHub App shorthand):
+  kpm cred register <name> --github-app <app-name>
+      --target <kind>:<location>:<secret-name>
+      [--target ...] [--ttl <seconds>] [--manual-only=false] [--scope <scope>]
+
   kpm cred list [--tag <tag>]
   kpm cred inspect <name> [--json]
   kpm cred rotate <name>
   kpm cred remove <name> [--purge]
 
 Examples:
+  # Sugar form — most common case
+  kpm cred register blog-audit \
+      --github-app agentkms-blog-audit-rotator \
+      --target TheGenXCoder/blog:CODE_REPO_READ_PAT
+
+  # Low-level form
   kpm cred register blog-audit-pat \
-      --provider github-app-token \
+      --provider github-pat \
       --provider-params '{"app_name":"agentkms-blog-audit"}' \
       --scope llm-session \
       --destination github-secret:owner/repo:BLOG_PAT \
@@ -152,9 +169,9 @@ Examples:
 // ── register ──────────────────────────────────────────────────────────────────
 
 func runCredRegister(ctx context.Context, w io.Writer, errW io.Writer, client *Client, args []string) int {
-	// Extract the name (first non-flag arg) and all --destination values
-	// before passing the remainder to flag.FlagSet.  This is necessary because
-	// flag.FlagSet stops parsing at the first non-flag argument, so
+	// Extract the name (first non-flag arg) and all --destination / --target
+	// values before passing the remainder to flag.FlagSet.  This is necessary
+	// because flag.FlagSet stops parsing at the first non-flag argument, so
 	// "register <name> --provider ..." would leave --provider unparsed.
 	if len(args) == 0 {
 		fmt.Fprintln(errW, "kpm cred register: binding name is required")
@@ -175,24 +192,33 @@ func runCredRegister(ctx context.Context, w io.Writer, errW io.Writer, client *C
 	fs := flag.NewFlagSet("cred register", flag.ContinueOnError)
 	fs.SetOutput(errW)
 
-	providerFlag := fs.String("provider", "", "credential provider kind (required)")
-	providerParamsFlag := fs.String("provider-params", "", "provider-specific parameters as JSON object")
+	providerFlag := fs.String("provider", "", "credential provider kind (required unless --github-app is set)")
+	providerParamsFlag := fs.String("provider-params", "", "provider-specific parameters as JSON object (conflicts with --github-app)")
+	githubAppFlag := fs.String("github-app", "", "GitHub App name; sugar for --provider github-pat --provider-params {\"app_name\":\"<name>\"}")
 	scopeFlag := fs.String("scope", "generic", "scope kind (e.g. llm-session, generic)")
-	ttlFlag := fs.Int64("ttl", 0, "TTL hint in seconds (0 = use provider default)")
+	ttlFlag := fs.Int64("ttl", -1, "TTL hint in seconds (-1 = use sugar default; 0 = provider default)")
 	manualOnlyFlag := fs.Bool("manual-only", true, "mark binding as manual-only (default: true)")
 	tagFlag := fs.String("tag", "", "comma-separated tags")
 
-	// --destination may appear multiple times; extract before flag.Parse.
+	// --destination and --target may appear multiple times; extract before flag.Parse.
 	var destinationStrs []string
+	var targetStrs []string
 	var flagArgs []string
 	for i := 0; i < len(remainingArgs); i++ {
-		if remainingArgs[i] == "--destination" && i+1 < len(remainingArgs) {
+		arg := remainingArgs[i]
+		switch {
+		case arg == "--destination" && i+1 < len(remainingArgs):
 			destinationStrs = append(destinationStrs, remainingArgs[i+1])
 			i++
-		} else if strings.HasPrefix(remainingArgs[i], "--destination=") {
-			destinationStrs = append(destinationStrs, strings.TrimPrefix(remainingArgs[i], "--destination="))
-		} else {
-			flagArgs = append(flagArgs, remainingArgs[i])
+		case strings.HasPrefix(arg, "--destination="):
+			destinationStrs = append(destinationStrs, strings.TrimPrefix(arg, "--destination="))
+		case arg == "--target" && i+1 < len(remainingArgs):
+			targetStrs = append(targetStrs, remainingArgs[i+1])
+			i++
+		case strings.HasPrefix(arg, "--target="):
+			targetStrs = append(targetStrs, strings.TrimPrefix(arg, "--target="))
+		default:
+			flagArgs = append(flagArgs, arg)
 		}
 	}
 
@@ -211,12 +237,45 @@ func runCredRegister(ctx context.Context, w io.Writer, errW io.Writer, client *C
 		name = positional[0]
 	}
 
+	// ── Sugar flag: --github-app ──────────────────────────────────────────────
+	// Validate mutual exclusion before applying defaults.
+	if *githubAppFlag != "" {
+		if *providerFlag != "" {
+			fmt.Fprintln(errW, "kpm cred register: cannot use --github-app together with --provider; use one or the other")
+			return 1
+		}
+		if *providerParamsFlag != "" {
+			fmt.Fprintln(errW, "kpm cred register: cannot use --github-app together with --provider-params; use one or the other")
+			return 1
+		}
+		// Apply sugar defaults.
+		*providerFlag = "github-pat"
+		*providerParamsFlag = `{"app_name":"` + *githubAppFlag + `"}`
+		// Default TTL to 3600 (GitHub installation token lifetime) when not
+		// explicitly provided by the caller (sentinel -1 means "unset").
+		if *ttlFlag == -1 {
+			*ttlFlag = 3600
+		}
+	}
+
+	// Resolve TTL sentinel: if still -1 the caller never set it and we're not
+	// in github-app mode, so fall back to 0 (provider default).
+	if *ttlFlag == -1 {
+		*ttlFlag = 0
+	}
+
+	// ── Sugar flag: --target ──────────────────────────────────────────────────
+	// --target k:t:n is sugar for --destination k:t:n with no inline params.
+	// Append targets to destinations (both may coexist).
+	destinationStrs = append(destinationStrs, targetStrs...)
+
+	// ── Validation ────────────────────────────────────────────────────────────
 	if *providerFlag == "" {
-		fmt.Fprintln(errW, "kpm cred register: --provider is required")
+		fmt.Fprintln(errW, "kpm cred register: --provider (or --github-app) is required")
 		return 1
 	}
 	if len(destinationStrs) == 0 {
-		fmt.Fprintln(errW, "kpm cred register: at least one --destination is required")
+		fmt.Fprintln(errW, "kpm cred register: at least one --destination or --target is required")
 		return 1
 	}
 

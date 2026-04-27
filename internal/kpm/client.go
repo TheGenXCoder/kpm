@@ -367,6 +367,101 @@ func (c *Client) RemoveBinding(ctx context.Context, name string, purge bool) err
 	return nil
 }
 
+// ── GitHub App endpoints ──────────────────────────────────────────────────────
+
+// GithubAppSummary is the list-endpoint shape for GitHub App registrations.
+// The private key is never included in any list or inspect response.
+type GithubAppSummary struct {
+	Name           string `json:"name"`
+	AppID          int64  `json:"app_id"`
+	InstallationID int64  `json:"installation_id"`
+}
+
+// RegisterGithubAppRequest is the POST /github-apps request body.
+type RegisterGithubAppRequest struct {
+	Name           string `json:"name"`
+	AppID          int64  `json:"app_id"`
+	InstallationID int64  `json:"installation_id"`
+	PrivateKeyPEM  []byte `json:"private_key_pem"`
+}
+
+// RegisterGithubApp registers a GitHub App installation with AgentKMS.
+// privateKeyPEM contains the PEM-encoded RSA private key and is sent over
+// the mTLS connection. The server stores it encrypted at rest; it is never
+// returned in any subsequent response.
+func (c *Client) RegisterGithubApp(ctx context.Context, req RegisterGithubAppRequest) (*GithubAppSummary, error) {
+	resp, err := c.doPost(ctx, c.baseURL+"/github-apps", req)
+	if err != nil {
+		return nil, fmt.Errorf("register github app: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		return nil, serverError(resp, "register github app "+req.Name)
+	}
+
+	var out GithubAppSummary
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("decode register github app response: %w", err)
+	}
+	return &out, nil
+}
+
+// ListGithubApps returns summaries of all registered GitHub App installations.
+func (c *Client) ListGithubApps(ctx context.Context) ([]GithubAppSummary, error) {
+	resp, err := c.doGet(ctx, c.baseURL+"/github-apps")
+	if err != nil {
+		return nil, fmt.Errorf("list github apps: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, serverError(resp, "list github apps")
+	}
+
+	var body struct {
+		Apps []GithubAppSummary `json:"apps"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, fmt.Errorf("decode list github apps response: %w", err)
+	}
+	return body.Apps, nil
+}
+
+// GetGithubApp retrieves the summary for a single GitHub App by name.
+// The private key is never returned.
+func (c *Client) GetGithubApp(ctx context.Context, name string) (*GithubAppSummary, error) {
+	resp, err := c.doGet(ctx, c.baseURL+"/github-apps/"+name)
+	if err != nil {
+		return nil, fmt.Errorf("get github app: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, serverError(resp, "get github app "+name)
+	}
+
+	var out GithubAppSummary
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("decode get github app response: %w", err)
+	}
+	return &out, nil
+}
+
+// RemoveGithubApp removes a registered GitHub App by name.
+func (c *Client) RemoveGithubApp(ctx context.Context, name string) error {
+	resp, err := c.doDelete(ctx, c.baseURL+"/github-apps/"+name)
+	if err != nil {
+		return fmt.Errorf("remove github app: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		return serverError(resp, "remove github app "+name)
+	}
+	return nil
+}
+
 // FetchGeneric retrieves a generic credential set at the given path.
 func (c *Client) FetchGeneric(ctx context.Context, path string) (*GenericCredential, error) {
 	url := c.baseURL + "/credentials/generic/" + path

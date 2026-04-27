@@ -542,3 +542,253 @@ func TestParseDestination_Invalid(t *testing.T) {
 		}
 	}
 }
+
+// ── --github-app / --target sugar flag tests ─────────────────────────────────
+
+// TestRunCredRegister_GithubApp_Sugar verifies that --github-app sets
+// provider_kind=github-pat and provider_params={"app_name":"..."} in the
+// request body, producing the same binding as the long-form equivalent.
+func TestRunCredRegister_GithubApp_Sugar(t *testing.T) {
+	srv, store := newBindingTestServer(t)
+	c := newTestClient(t, srv)
+
+	var w, errW bytes.Buffer
+	args := []string{
+		"register", "blog-audit",
+		"--github-app", "agentkms-blog-audit-rotator",
+		"--target", "github-secret:TheGenXCoder/blog:CODE_REPO_READ_PAT",
+	}
+	code := kpm.RunCred(context.Background(), &w, &errW, c, args)
+	if code != 0 {
+		t.Fatalf("exit code %d: %s", code, errW.String())
+	}
+
+	b, ok := store.bindings["blog-audit"]
+	if !ok {
+		t.Fatal("binding not saved")
+	}
+	if b.ProviderKind != "github-pat" {
+		t.Errorf("provider_kind: got %q want %q", b.ProviderKind, "github-pat")
+	}
+	appName, _ := b.ProviderParams["app_name"].(string)
+	if appName != "agentkms-blog-audit-rotator" {
+		t.Errorf("provider_params.app_name: got %q want %q", appName, "agentkms-blog-audit-rotator")
+	}
+	if b.RotationPolicy.TTLHintSeconds != 3600 {
+		t.Errorf("ttl_hint_seconds: got %d want 3600", b.RotationPolicy.TTLHintSeconds)
+	}
+}
+
+// TestRunCredRegister_GithubApp_LongFormEquivalence verifies that the sugar
+// form produces an identical binding to the explicit long-form flags.
+func TestRunCredRegister_GithubApp_LongFormEquivalence(t *testing.T) {
+	srv, store := newBindingTestServer(t)
+	c := newTestClient(t, srv)
+
+	// Register via sugar.
+	var w, errW bytes.Buffer
+	kpm.RunCred(context.Background(), &w, &errW, c, []string{
+		"register", "sugar-binding",
+		"--github-app", "my-rotator",
+		"--target", "github-secret:owner/repo:MY_SECRET",
+		"--ttl", "3600",
+	})
+
+	// Register via explicit long-form.
+	kpm.RunCred(context.Background(), &bytes.Buffer{}, &bytes.Buffer{}, c, []string{
+		"register", "explicit-binding",
+		"--provider", "github-pat",
+		"--provider-params", `{"app_name":"my-rotator"}`,
+		"--destination", "github-secret:owner/repo:MY_SECRET",
+		"--ttl", "3600",
+	})
+
+	sugar := store.bindings["sugar-binding"]
+	explicit := store.bindings["explicit-binding"]
+
+	if sugar.ProviderKind != explicit.ProviderKind {
+		t.Errorf("provider_kind mismatch: sugar=%q explicit=%q", sugar.ProviderKind, explicit.ProviderKind)
+	}
+	sugarApp, _ := sugar.ProviderParams["app_name"].(string)
+	explicitApp, _ := explicit.ProviderParams["app_name"].(string)
+	if sugarApp != explicitApp {
+		t.Errorf("app_name mismatch: sugar=%q explicit=%q", sugarApp, explicitApp)
+	}
+	if sugar.RotationPolicy.TTLHintSeconds != explicit.RotationPolicy.TTLHintSeconds {
+		t.Errorf("ttl mismatch: sugar=%d explicit=%d",
+			sugar.RotationPolicy.TTLHintSeconds, explicit.RotationPolicy.TTLHintSeconds)
+	}
+	if len(sugar.Destinations) != len(explicit.Destinations) {
+		t.Fatalf("destination count mismatch: sugar=%d explicit=%d",
+			len(sugar.Destinations), len(explicit.Destinations))
+	}
+	if sugar.Destinations[0].Kind != explicit.Destinations[0].Kind {
+		t.Errorf("destination kind mismatch: sugar=%q explicit=%q",
+			sugar.Destinations[0].Kind, explicit.Destinations[0].Kind)
+	}
+	if sugar.Destinations[0].TargetID != explicit.Destinations[0].TargetID {
+		t.Errorf("destination target_id mismatch: sugar=%q explicit=%q",
+			sugar.Destinations[0].TargetID, explicit.Destinations[0].TargetID)
+	}
+}
+
+// TestRunCredRegister_GithubApp_ConflictsWithProvider verifies that
+// --github-app + --provider produces an error.
+func TestRunCredRegister_GithubApp_ConflictsWithProvider(t *testing.T) {
+	srv, _ := newBindingTestServer(t)
+	c := newTestClient(t, srv)
+
+	var w, errW bytes.Buffer
+	args := []string{
+		"register", "x",
+		"--github-app", "foo",
+		"--provider", "some-other-provider",
+		"--destination", "github-secret:owner/repo:S",
+	}
+	code := kpm.RunCred(context.Background(), &w, &errW, c, args)
+	if code == 0 {
+		t.Fatal("expected non-zero exit code when --github-app conflicts with --provider")
+	}
+	if !strings.Contains(errW.String(), "--github-app") || !strings.Contains(errW.String(), "--provider") {
+		t.Errorf("error message should mention both flags; got: %q", errW.String())
+	}
+}
+
+// TestRunCredRegister_GithubApp_ConflictsWithProviderParams verifies that
+// --github-app + --provider-params produces an error.
+func TestRunCredRegister_GithubApp_ConflictsWithProviderParams(t *testing.T) {
+	srv, _ := newBindingTestServer(t)
+	c := newTestClient(t, srv)
+
+	var w, errW bytes.Buffer
+	args := []string{
+		"register", "x",
+		"--github-app", "foo",
+		"--provider-params", `{"app_name":"bar"}`,
+		"--destination", "github-secret:owner/repo:S",
+	}
+	code := kpm.RunCred(context.Background(), &w, &errW, c, args)
+	if code == 0 {
+		t.Fatal("expected non-zero exit code when --github-app conflicts with --provider-params")
+	}
+	if !strings.Contains(errW.String(), "--github-app") || !strings.Contains(errW.String(), "--provider-params") {
+		t.Errorf("error message should mention both flags; got: %q", errW.String())
+	}
+}
+
+// TestRunCredRegister_Target_NoParams verifies that --target produces a
+// destination with an empty Params map (no inline params).
+func TestRunCredRegister_Target_NoParams(t *testing.T) {
+	srv, store := newBindingTestServer(t)
+	c := newTestClient(t, srv)
+
+	var w, errW bytes.Buffer
+	args := []string{
+		"register", "target-test",
+		"--provider", "github-pat",
+		"--target", "github-secret:owner/repo:MY_SECRET",
+	}
+	code := kpm.RunCred(context.Background(), &w, &errW, c, args)
+	if code != 0 {
+		t.Fatalf("exit code %d: %s", code, errW.String())
+	}
+
+	b := store.bindings["target-test"]
+	if len(b.Destinations) != 1 {
+		t.Fatalf("expected 1 destination, got %d", len(b.Destinations))
+	}
+	if len(b.Destinations[0].Params) != 0 {
+		t.Errorf("expected empty Params for --target destination, got %v", b.Destinations[0].Params)
+	}
+	if b.Destinations[0].Kind != "github-secret" {
+		t.Errorf("kind: got %q want %q", b.Destinations[0].Kind, "github-secret")
+	}
+	if b.Destinations[0].TargetID != "owner/repo:MY_SECRET" {
+		t.Errorf("target_id: got %q want %q", b.Destinations[0].TargetID, "owner/repo:MY_SECRET")
+	}
+}
+
+// TestRunCredRegister_Target_Multiple verifies that multiple --target flags
+// each produce a separate destination.
+func TestRunCredRegister_Target_Multiple(t *testing.T) {
+	srv, store := newBindingTestServer(t)
+	c := newTestClient(t, srv)
+
+	var w, errW bytes.Buffer
+	args := []string{
+		"register", "multi-target",
+		"--provider", "github-pat",
+		"--target", "github-secret:owner/repo-a:SECRET_A",
+		"--target", "github-secret:owner/repo-b:SECRET_B",
+	}
+	code := kpm.RunCred(context.Background(), &w, &errW, c, args)
+	if code != 0 {
+		t.Fatalf("exit code %d: %s", code, errW.String())
+	}
+
+	b := store.bindings["multi-target"]
+	if len(b.Destinations) != 2 {
+		t.Fatalf("expected 2 destinations, got %d", len(b.Destinations))
+	}
+}
+
+// TestRunCredRegister_Target_AndDestination verifies that --target and
+// --destination together both contribute to the binding's destinations.
+func TestRunCredRegister_Target_AndDestination(t *testing.T) {
+	srv, store := newBindingTestServer(t)
+	c := newTestClient(t, srv)
+
+	var w, errW bytes.Buffer
+	args := []string{
+		"register", "mixed-dest",
+		"--provider", "github-pat",
+		"--destination", `github-secret:owner/repo-a:SECRET_A:{"visibility":"all"}`,
+		"--target", "github-secret:owner/repo-b:SECRET_B",
+	}
+	code := kpm.RunCred(context.Background(), &w, &errW, c, args)
+	if code != 0 {
+		t.Fatalf("exit code %d: %s", code, errW.String())
+	}
+
+	b := store.bindings["mixed-dest"]
+	if len(b.Destinations) != 2 {
+		t.Fatalf("expected 2 destinations, got %d; out=%q err=%q", len(b.Destinations), w.String(), errW.String())
+	}
+}
+
+// TestRunCredRegister_GithubApp_DefaultTTL verifies that --github-app without
+// an explicit --ttl defaults to 3600 seconds.
+func TestRunCredRegister_GithubApp_DefaultTTL(t *testing.T) {
+	srv, store := newBindingTestServer(t)
+	c := newTestClient(t, srv)
+
+	kpm.RunCred(context.Background(), &bytes.Buffer{}, &bytes.Buffer{}, c, []string{
+		"register", "ttl-default",
+		"--github-app", "my-app",
+		"--target", "github-secret:owner/repo:S",
+	})
+
+	b := store.bindings["ttl-default"]
+	if b.RotationPolicy.TTLHintSeconds != 3600 {
+		t.Errorf("ttl_hint_seconds: got %d want 3600", b.RotationPolicy.TTLHintSeconds)
+	}
+}
+
+// TestRunCredRegister_GithubApp_ExplicitTTL verifies that an explicit --ttl
+// overrides the github-app sugar default.
+func TestRunCredRegister_GithubApp_ExplicitTTL(t *testing.T) {
+	srv, store := newBindingTestServer(t)
+	c := newTestClient(t, srv)
+
+	kpm.RunCred(context.Background(), &bytes.Buffer{}, &bytes.Buffer{}, c, []string{
+		"register", "ttl-explicit",
+		"--github-app", "my-app",
+		"--target", "github-secret:owner/repo:S",
+		"--ttl", "7200",
+	})
+
+	b := store.bindings["ttl-explicit"]
+	if b.RotationPolicy.TTLHintSeconds != 7200 {
+		t.Errorf("ttl_hint_seconds: got %d want 7200", b.RotationPolicy.TTLHintSeconds)
+	}
+}
