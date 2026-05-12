@@ -89,11 +89,12 @@ resource "kpm_secret" "db_password" {
 }
 ```
 
-| CRUD | AgentKMS endpoint |
-|------|-------------------|
-| Create/Update | `POST /credentials/generic/{path}` |
-| Read | `GET /credentials/generic/{path}` |
-| Delete | `DELETE /credentials/generic/{path}` |
+The `type` field determines which AgentKMS endpoint family is used:
+
+| type | CRUD endpoints |
+|------|----------------|
+| `generic` (default) | `POST/GET/DELETE /credentials/generic/{path}` |
+| `llm` | `POST/GET/DELETE /credentials/llm/{provider}` |
 
 `value` is `Sensitive: true` in the schema — redacted from plan output and state display. The raw value is stored in Terraform state (encrypted at rest by the state backend — S3+KMS, Terraform Cloud, etc. — same model as `aws_secretsmanager_secret_version`).
 
