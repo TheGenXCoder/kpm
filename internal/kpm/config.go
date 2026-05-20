@@ -17,6 +17,11 @@ type Config struct {
 	DefaultTemplate string `yaml:"default_template"`
 	SecureMode      bool   `yaml:"secure_mode"`
 	SessionKeyTTL   int    `yaml:"session_key_ttl"`
+	// TrustDomain is the SPIFFE trust domain used in device cert SANs.
+	// Default: "catalyst9.local"
+	TrustDomain string `yaml:"trust_domain"`
+	// Tenant identifies the organisational tenant within the trust domain.
+	Tenant string `yaml:"tenant"`
 }
 
 // DefaultConfigPath returns the default config file path.

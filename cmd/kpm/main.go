@@ -41,6 +41,9 @@ Usage:
   kpm profile                     Show merged profile variables for current directory
   kpm config push [dir]           Push templates to AgentKMS (requires agentkms-dev)
   kpm config pull [dir]           Pull templates from AgentKMS
+  kpm enroll <bootstrap-token>    Enroll this device: generates a keypair + CSR and gets a cert
+  kpm device list [--json]        List enrolled devices for this account
+  kpm device revoke <name>        Revoke an enrolled device certificate
   kpm cred <subcommand>           Manage credential bindings (register/list/inspect/rotate/remove)
   kpm gh-app <subcommand>         Manage GitHub App installations (register/list/inspect/remove)
   kpm webauthn <subcommand>       Manage WebAuthn credentials (register/list/remove)
@@ -114,6 +117,79 @@ func main() {
 	// new auth-session storage.
 	if subcmd == "login" || subcmd == "logout" || subcmd == "whoami" {
 		os.Exit(runAuthCmd(subcmd, os.Args[2:]))
+	}
+
+	// kpm enroll is dispatched early: it uses a bare (no-mTLS) client because
+	// no cert files exist yet.  It writes cert files to CertsDir().
+	if subcmd == "enroll" {
+		cfg := &kpm.Config{}
+		if _, err := os.Stat(kpm.DefaultConfigPath()); err == nil {
+			if loaded, loadErr := kpm.LoadConfig(kpm.DefaultConfigPath()); loadErr == nil {
+				cfg = loaded
+			}
+		}
+		for i, a := range os.Args[2:] {
+			switch {
+			case a == "--server" && i+1 < len(os.Args[2:]):
+				cfg.Server = os.Args[3+i]
+			case strings.HasPrefix(a, "--server="):
+				cfg.Server = strings.TrimPrefix(a, "--server=")
+			}
+		}
+		if cfg.Server == "" {
+			fmt.Fprintln(os.Stderr, "error: server URL required (set via config or --server)")
+			os.Exit(1)
+		}
+		rawClient, err := kpm.NewClientInsecure(cfg.Server)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error creating client: %v\n", err)
+			os.Exit(1)
+		}
+		adapter := &kpm.ClientEnrollAdapter{C: rawClient}
+		os.Exit(kpm.RunEnroll(
+			context.Background(), os.Stdout, os.Stderr,
+			adapter,
+			kpm.CertsDir(),
+			cfg,
+			os.Args[2:],
+		))
+	}
+
+	// kpm device is dispatched early: it has its own flag parsing and does not
+	// share the global flag set. Route before fs.Parse.
+	if subcmd == "device" {
+		cfg := &kpm.Config{}
+		if _, err := os.Stat(kpm.DefaultConfigPath()); err == nil {
+			if loaded, loadErr := kpm.LoadConfig(kpm.DefaultConfigPath()); loadErr == nil {
+				cfg = loaded
+			}
+		}
+		for i, a := range os.Args[2:] {
+			switch {
+			case a == "--server" && i+1 < len(os.Args[2:]):
+				cfg.Server = os.Args[3+i]
+			case strings.HasPrefix(a, "--server="):
+				cfg.Server = strings.TrimPrefix(a, "--server=")
+			case a == "--cert" && i+1 < len(os.Args[2:]):
+				cfg.Cert = os.Args[3+i]
+			case strings.HasPrefix(a, "--cert="):
+				cfg.Cert = strings.TrimPrefix(a, "--cert=")
+			case a == "--key" && i+1 < len(os.Args[2:]):
+				cfg.Key = os.Args[3+i]
+			case strings.HasPrefix(a, "--key="):
+				cfg.Key = strings.TrimPrefix(a, "--key=")
+			case a == "--ca" && i+1 < len(os.Args[2:]):
+				cfg.CA = os.Args[3+i]
+			case strings.HasPrefix(a, "--ca="):
+				cfg.CA = strings.TrimPrefix(a, "--ca=")
+			}
+		}
+		client := buildClient(cfg)
+		os.Exit(kpm.RunDevice(
+			context.Background(), os.Stdout, os.Stderr,
+			client, kpm.CertsDir(),
+			os.Args[2:],
+		))
 	}
 
 	// kpm gh-app is dispatched early: it has its own flag parsing and does not
