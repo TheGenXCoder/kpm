@@ -69,8 +69,13 @@ func TestAuthenticateServerDown(t *testing.T) {
 }
 
 // --- doGet/doPost/doDelete when auth fails ---
+//
+// These tests pin KPM_DATA to a temp dir so the persisted-session lookup
+// added by Phase 1 piece #2 finds nothing and the client falls through to
+// the legacy /auth/session call (which the mock 401s).
 
 func TestDoGetAuthFailure(t *testing.T) {
+	t.Setenv("KPM_DATA", t.TempDir())
 	srv := mockServerNoAuth(func(w http.ResponseWriter, r *http.Request) {
 		// Always fail auth
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -85,6 +90,7 @@ func TestDoGetAuthFailure(t *testing.T) {
 }
 
 func TestDoPostAuthFailure(t *testing.T) {
+	t.Setenv("KPM_DATA", t.TempDir())
 	srv := mockServerNoAuth(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 	})
@@ -98,6 +104,7 @@ func TestDoPostAuthFailure(t *testing.T) {
 }
 
 func TestDoDeleteAuthFailure(t *testing.T) {
+	t.Setenv("KPM_DATA", t.TempDir())
 	srv := mockServerNoAuth(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 	})

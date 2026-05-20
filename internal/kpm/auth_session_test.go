@@ -174,8 +174,7 @@ func TestAuthSession_AtomicRename(t *testing.T) {
 }
 
 func TestDecodeJWTClaims(t *testing.T) {
-	// Build a minimal JWT-shaped string: header.payload.sig where payload is
-	// base64url(no padding) JSON.
+	// 3-segment form: header.payload.sig
 	payload := `{"sub":"bert@platform","team":"platform","role":"developer","spiffe":"spiffe://x/y/z","as":"device+human"}`
 	body := base64.RawURLEncoding.EncodeToString([]byte(payload))
 	token := "ignored." + body + ".sig"
@@ -186,7 +185,14 @@ func TestDecodeJWTClaims(t *testing.T) {
 		claims.Role != "developer" ||
 		claims.SPIFFE != "spiffe://x/y/z" ||
 		claims.AuthStrength != "device+human" {
-		t.Errorf("unexpected claims: %+v", claims)
+		t.Errorf("3-segment: unexpected claims: %+v", claims)
+	}
+
+	// 2-segment form: payload.sig (AgentKMS's current shape — no header).
+	tok2 := body + ".sig"
+	claims2 := DecodeJWTClaims(tok2)
+	if claims2.Sub != "bert@platform" {
+		t.Errorf("2-segment: expected sub=bert@platform, got %+v", claims2)
 	}
 
 	// Malformed tokens return zero-value claims, not panics.

@@ -158,25 +158,47 @@ func DeleteAuthSession() error {
 // server's responsibility; the client only needs the bearer claims for
 // display purposes.
 //
+// Token shapes accepted:
+//
+//	header.payload.sig   — standard 3-segment JWT.  Payload is parts[1].
+//	payload.sig          — 2-segment shape used by AgentKMS today (no header,
+//	                       trust-domain key chosen out-of-band).  Payload is
+//	                       parts[0].
+//
 // Returns a zero-value AuthClaims on parse failure rather than an error,
 // because a token whose claims we can't read is still usable as a bearer —
 // we just can't display nice metadata for it.
+//
+// Field names match AgentKMS's tokens.go: sub/team/role/spiffe/as.
 func DecodeJWTClaims(token string) AuthClaims {
 	parts := strings.Split(token, ".")
 	if len(parts) < 2 {
 		return AuthClaims{}
 	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		// Some encoders use std base64 with padding — try that.
-		if p, e2 := base64.StdEncoding.DecodeString(parts[1]); e2 == nil {
-			payload = p
-		} else {
-			return AuthClaims{}
-		}
+
+	// Heuristic: a 3-segment JWT has the payload at index 1.  A 2-segment
+	// token (AgentKMS's current shape) has it at index 0.  Anything longer
+	// (4+) is malformed — try index 1 anyway.
+	payloadIdx := 1
+	if len(parts) == 2 {
+		payloadIdx = 0
 	}
 
-	// Match the JWT field names emitted by AgentKMS (internal/auth/tokens.go).
+	tryDecode := func(s string) ([]byte, bool) {
+		if b, err := base64.RawURLEncoding.DecodeString(s); err == nil {
+			return b, true
+		}
+		if b, err := base64.StdEncoding.DecodeString(s); err == nil {
+			return b, true
+		}
+		return nil, false
+	}
+
+	payload, ok := tryDecode(parts[payloadIdx])
+	if !ok {
+		return AuthClaims{}
+	}
+
 	var raw struct {
 		Sub     string `json:"sub"`
 		Team    string `json:"team"`
