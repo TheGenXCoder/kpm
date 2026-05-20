@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -147,6 +148,26 @@ func NewClientInsecure(baseURL string) (*Client, error) {
 		baseURL:    baseURL,
 		httpClient: &http.Client{Timeout: 10 * time.Second},
 	}, nil
+}
+
+// NewClientCAOnly creates an AgentKMS client that verifies the server cert
+// against caPath but does NOT present a client cert. Used by `kpm enroll`
+// (mode-1 bootstrap-token path) where the caller does not yet have an mTLS
+// identity but still needs to talk to a real production AgentKMS over TLS.
+func NewClientCAOnly(baseURL, caPath string) (*Client, error) {
+	caPEM, err := os.ReadFile(caPath)
+	if err != nil {
+		return nil, fmt.Errorf("read CA %s: %w", caPath, err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		return nil, fmt.Errorf("no PEM blocks in %s", caPath)
+	}
+	tlsCfg := &tls.Config{
+		RootCAs:    pool,
+		MinVersion: tls.VersionTLS12,
+	}
+	return newClientWithTLS(baseURL, tlsCfg), nil
 }
 
 // SessionResponse is the wire shape of /auth/session and /auth/refresh.

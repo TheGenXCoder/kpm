@@ -140,7 +140,10 @@ func main() {
 			fmt.Fprintln(os.Stderr, "error: server URL required (set via config or --server)")
 			os.Exit(1)
 		}
-		rawClient, err := kpm.NewClientInsecure(cfg.Server)
+		// Enroll happens BEFORE the caller has a client cert (the whole point),
+		// so we can't do mTLS — but we still need to verify the server cert
+		// against the configured CA. NewClientCAOnly does exactly that.
+		rawClient, err := kpm.NewClientCAOnly(cfg.Server, cfg.CA)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error creating client: %v\n", err)
 			os.Exit(1)

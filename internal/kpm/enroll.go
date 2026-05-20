@@ -84,6 +84,7 @@ func RunEnroll(
 	fs := flag.NewFlagSet("enroll", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	deviceFlag := fs.String("device", "", "device name (default: hostname)")
+	userFlag := fs.String("user", "", "user id encoded in the SPIFFE URI (must match the bootstrap record)")
 	forceFlag := fs.Bool("force", false, "overwrite existing key without refusing")
 	if err := fs.Parse(args); err != nil {
 		return 1
@@ -139,7 +140,11 @@ func RunEnroll(
 	// The user component is unknown until the server validates the bootstrap token,
 	// so we use "self" as a placeholder; the server extracts the real user from the
 	// bootstrap record and stamps the issued cert accordingly.
-	sanURI := buildSPIFFEURI(trustDomain, tenant, deviceName)
+	userID := *userFlag
+	if userID == "" {
+		userID = "self"
+	}
+	sanURI := buildSPIFFEURI(trustDomain, tenant, userID, deviceName)
 
 	csrTemplate := &x509.CertificateRequest{
 		Subject:  pkix.Name{CommonName: deviceName},
@@ -254,11 +259,15 @@ func (c *Client) IssueCert(ctx context.Context, req CertIssueRequest) (*CertIssu
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-// buildSPIFFEURI constructs the SPIFFE SAN URI.
-// spiffe://<trust-domain>/tenant/<tenant>/user/self/device/<device>
-// We use "self" for the user component because the server stamps the real
-// user from the bootstrap record; the CSR user is advisory only.
-func buildSPIFFEURI(trustDomain, tenant, device string) string {
+// buildSPIFFEURI constructs the SPIFFE SAN URI:
+//
+//	spiffe://<trust-domain>/tenant/<tenant>/user/<user>/device/<device>
+//
+// The user component must match the user_id the server expects — typically
+// the user_id recorded against the bootstrap token, or the session's user_id
+// for the self-add path. Pass "self" as a placeholder for legacy/dev mode
+// where the server stamps the user itself.
+func buildSPIFFEURI(trustDomain, tenant, user, device string) string {
 	var b strings.Builder
 	b.WriteString("spiffe://")
 	b.WriteString(trustDomain)
@@ -266,7 +275,9 @@ func buildSPIFFEURI(trustDomain, tenant, device string) string {
 		b.WriteString("/tenant/")
 		b.WriteString(tenant)
 	}
-	b.WriteString("/user/self/device/")
+	b.WriteString("/user/")
+	b.WriteString(user)
+	b.WriteString("/device/")
 	b.WriteString(device)
 	return b.String()
 }
