@@ -24,6 +24,7 @@ Usage:
   kpm quickstart                  Set up local dev environment (no server needed)
   kpm shell-init                  Shell integration (add to .bashrc/.zshrc)
   kpm login                       Authenticate to AgentKMS and persist the session
+  kpm login --step-up             Upgrade session from cert-only to cert+human (WebAuthn)
   kpm logout                      Revoke the persisted session and remove it
   kpm whoami                      Show the active session's identity
   kpm add <service/name>          Store a secret in AgentKMS
@@ -564,6 +565,17 @@ func runAuthCmd(subcmd string, args []string) int {
 
 	switch subcmd {
 	case "login":
+		// --step-up upgrades an existing cert-only session to cert+human via
+		// a WebAuthn browser ceremony.
+		for _, a := range args {
+			if a == "--step-up" || a == "-step-up" {
+				if err := kpm.RunStepUp(ctx, os.Stderr, client); err != nil {
+					fmt.Fprintf(os.Stderr, "error: %v\n", err)
+					return 1
+				}
+				return 0
+			}
+		}
 		if err := kpm.RunLogin(ctx, os.Stderr, client); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			return 1
