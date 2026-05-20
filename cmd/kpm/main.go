@@ -23,6 +23,9 @@ const usage = `kpm — secure secrets CLI backed by AgentKMS
 Usage:
   kpm quickstart                  Set up local dev environment (no server needed)
   kpm shell-init                  Shell integration (add to .bashrc/.zshrc)
+  kpm login                       Authenticate to AgentKMS and persist the session
+  kpm logout                      Revoke the persisted session and remove it
+  kpm whoami                      Show the active session's identity
   kpm add <service/name>          Store a secret in AgentKMS
   kpm list [service]              List secrets in registry
   kpm describe <service/name>     Show secret metadata (never values)
@@ -102,6 +105,14 @@ func main() {
 	jsonFlag := fs.Bool("json", false, "output JSON instead of table (list command)")
 	serviceFlag := fs.String("service", "", "service name (alternative to positional path)")
 	nameFlag := fs.String("name", "", "secret name (alternative to positional path)")
+
+	// kpm login / logout / whoami are dispatched early.  They have no
+	// subcommand-specific flags; they consume the global connection flags
+	// (--server / --cert / --key / --ca) and otherwise speak directly to the
+	// new auth-session storage.
+	if subcmd == "login" || subcmd == "logout" || subcmd == "whoami" {
+		os.Exit(runAuthCmd(subcmd, os.Args[2:]))
+	}
 
 	// kpm gh-app is dispatched early: it has its own flag parsing and does not
 	// share the global flag set. Route before fs.Parse.
@@ -497,6 +508,75 @@ func main() {
 			os.Exit(1)
 		}
 	}
+}
+
+// runAuthCmd dispatches `kpm login`, `kpm logout`, and `kpm whoami`.
+// Returns the exit code; the caller os.Exit's with the result.
+//
+// `whoami` is a local-only operation — it reads the persisted session file
+// without any network access — so it does not require server config.  The
+// others build a client from config + global flags the same way other
+// commands do.
+func runAuthCmd(subcmd string, args []string) int {
+	if subcmd == "whoami" {
+		err := kpm.RunWhoami(os.Stdout)
+		if err != nil {
+			if os.IsNotExist(err) {
+				fmt.Fprintln(os.Stdout, "Not logged in")
+				return 1
+			}
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+
+	// login / logout need the AgentKMS client.
+	cfg := &kpm.Config{}
+	if _, err := os.Stat(kpm.DefaultConfigPath()); err == nil {
+		if loaded, loadErr := kpm.LoadConfig(kpm.DefaultConfigPath()); loadErr == nil {
+			cfg = loaded
+		}
+	}
+	// Best-effort parse of the global connection flags from the remaining args.
+	for i, a := range args {
+		switch {
+		case a == "--server" && i+1 < len(args):
+			cfg.Server = args[i+1]
+		case strings.HasPrefix(a, "--server="):
+			cfg.Server = strings.TrimPrefix(a, "--server=")
+		case a == "--cert" && i+1 < len(args):
+			cfg.Cert = args[i+1]
+		case strings.HasPrefix(a, "--cert="):
+			cfg.Cert = strings.TrimPrefix(a, "--cert=")
+		case a == "--key" && i+1 < len(args):
+			cfg.Key = args[i+1]
+		case strings.HasPrefix(a, "--key="):
+			cfg.Key = strings.TrimPrefix(a, "--key=")
+		case a == "--ca" && i+1 < len(args):
+			cfg.CA = args[i+1]
+		case strings.HasPrefix(a, "--ca="):
+			cfg.CA = strings.TrimPrefix(a, "--ca=")
+		}
+	}
+	client := buildClient(cfg)
+	ctx := context.Background()
+
+	switch subcmd {
+	case "login":
+		if err := kpm.RunLogin(ctx, os.Stderr, client); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return 1
+		}
+		return 0
+	case "logout":
+		if err := kpm.RunLogout(ctx, os.Stderr, client); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	return 1
 }
 
 func buildClient(cfg *kpm.Config) *kpm.Client {
