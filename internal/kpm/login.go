@@ -41,12 +41,28 @@ func RunLogin(ctx context.Context, stderr io.Writer, client *Client) error {
 		return fmt.Errorf("persist session: %w", err)
 	}
 
-	who := claims.Sub
-	if who == "" {
-		who = "(anonymous)"
+	// Format depends on whether this was a new-style multi-principal cert
+	// or a legacy device-only cert.  We detect by the relationship between
+	// UserID and DeviceID — see auth_session.go for the schema contract.
+	switch {
+	case claims.UserID != "" && claims.DeviceID != "" && claims.UserID != claims.DeviceID:
+		// New-style: separate user and device.  Show both for clarity.
+		fmt.Fprintf(stderr, "Logged in as %s on device %s (session expires in %s, session %s)\n",
+			claims.UserID, claims.DeviceID,
+			formatRemaining(time.Until(expiresAt)), sr.SessionID)
+	case claims.DeviceID != "":
+		// Legacy device-only cert: UserID was synthesised from DeviceID.
+		// Don't pretend there's a separate user.
+		fmt.Fprintf(stderr, "Logged in as %s (legacy device-only cert)\n", claims.DeviceID)
+	default:
+		// Non-SPIFFE / unknown shape: fall back to whatever "sub" carries.
+		who := claims.Sub
+		if who == "" {
+			who = "(anonymous)"
+		}
+		fmt.Fprintf(stderr, "Logged in as %s (session expires in %s, session %s)\n",
+			who, formatRemaining(time.Until(expiresAt)), sr.SessionID)
 	}
-	fmt.Fprintf(stderr, "Logged in as %s (session expires in %s, session %s)\n",
-		who, formatRemaining(time.Until(expiresAt)), sr.SessionID)
 	return nil
 }
 
@@ -87,6 +103,16 @@ func RunLogout(ctx context.Context, stderr io.Writer, client *Client) error {
 // RunWhoami implements `kpm whoami`.  Reads the persisted session and prints
 // the identity material to stdout.  Returns os.ErrNotExist when there is no
 // session (the caller maps that to exit code 1).
+//
+// The User/Device split is rendered three ways depending on what the JWT
+// carried:
+//
+//   - UserID != DeviceID (new-style cert)      → show both lines
+//   - UserID == DeviceID (legacy device cert)  → "Device" + "User: (none — legacy cert)"
+//   - UserID is empty entirely                  → "Device" only
+//
+// This makes it obvious at a glance whether re-enrolment for the new SPIFFE
+// convention has happened, without burying the legacy state behind a flag.
 func RunWhoami(stdout io.Writer) error {
 	s, err := LoadAuthSession()
 	if err != nil {
@@ -95,25 +121,46 @@ func RunWhoami(stdout io.Writer) error {
 		}
 		return fmt.Errorf("load session: %w", err)
 	}
+	c := s.Claims
 
-	identity := s.Claims.Sub
-	if identity == "" {
-		identity = "(anonymous)"
+	switch {
+	case c.UserID != "" && c.UserID != c.DeviceID:
+		// New-style cert: separate logical user and device.
+		fmt.Fprintf(stdout, "User:           %s\n", c.UserID)
+		fmt.Fprintf(stdout, "Device:         %s\n", c.DeviceID)
+	case c.UserID != "" && c.UserID == c.DeviceID && c.DeviceID != "":
+		// Legacy device-only cert: the server synthesises UserID = DeviceID.
+		// Render that explicitly so the operator knows to re-enroll.
+		fmt.Fprintf(stdout, "Device:         %s\n", c.DeviceID)
+		fmt.Fprintf(stdout, "User:           (none — legacy cert)\n")
+	case c.DeviceID != "":
+		// Defensive: DeviceID present but UserID empty.
+		fmt.Fprintf(stdout, "Device:         %s\n", c.DeviceID)
+	default:
+		// No SPIFFE-derived identity at all — fall back to legacy sub display.
+		identity := c.Sub
+		if identity == "" {
+			identity = "(anonymous)"
+		}
+		fmt.Fprintf(stdout, "Identity:       %s\n", identity)
 	}
-	fmt.Fprintf(stdout, "Identity:       %s\n", identity)
-	if s.Claims.Team != "" {
-		fmt.Fprintf(stdout, "Team:           %s\n", s.Claims.Team)
+
+	if c.Tenant != "" {
+		fmt.Fprintf(stdout, "Tenant:         %s\n", c.Tenant)
 	}
-	if s.Claims.Role != "" {
-		fmt.Fprintf(stdout, "Role:           %s\n", s.Claims.Role)
+	if c.Team != "" {
+		fmt.Fprintf(stdout, "Team:           %s\n", c.Team)
 	}
-	if s.Claims.SPIFFE != "" {
-		fmt.Fprintf(stdout, "SPIFFE:         %s\n", s.Claims.SPIFFE)
+	if c.Role != "" {
+		fmt.Fprintf(stdout, "Role:           %s\n", c.Role)
+	}
+	if c.SPIFFE != "" {
+		fmt.Fprintf(stdout, "SPIFFE:         %s\n", c.SPIFFE)
 	}
 	fmt.Fprintf(stdout, "Session ID:     %s\n", s.SessionID)
 	fmt.Fprintf(stdout, "Expires in:     %s\n", formatRemaining(time.Until(s.ExpiresAt)))
-	if s.Claims.AuthStrength != "" {
-		fmt.Fprintf(stdout, "Auth strength:  %s\n", s.Claims.AuthStrength)
+	if c.AuthStrength != "" {
+		fmt.Fprintf(stdout, "Auth strength:  %s\n", c.AuthStrength)
 	}
 	return nil
 }

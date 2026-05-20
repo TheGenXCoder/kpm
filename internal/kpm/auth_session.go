@@ -58,11 +58,14 @@ type AuthSession struct {
 // verify the JWT signature client-side — verification is the server's job;
 // the client trusts the token because it came over mTLS.
 type AuthClaims struct {
-	Sub          string `json:"sub,omitempty"`            // CallerID
-	Team         string `json:"team,omitempty"`           // TeamID
-	Role         string `json:"role,omitempty"`           // Role
-	SPIFFE       string `json:"spiffe,omitempty"`         // SPIFFE URI (if present)
-	AuthStrength string `json:"auth_strength,omitempty"`  // "device" or "device+human"
+	Sub          string `json:"sub,omitempty"`           // CallerID (UserID when known, else cert CN)
+	UserID       string `json:"user_id,omitempty"`       // Logical user from SPIFFE /user/<u>
+	DeviceID     string `json:"device_id,omitempty"`     // Specific device cert from SPIFFE /device/<d>
+	Tenant       string `json:"tenant,omitempty"`        // Tenant from SPIFFE /tenant/<t>
+	Team         string `json:"team,omitempty"`          // TeamID
+	Role         string `json:"role,omitempty"`          // Role
+	SPIFFE       string `json:"spiffe,omitempty"`        // SPIFFE URI (if present)
+	AuthStrength string `json:"auth_strength,omitempty"` // "cert-only" or "cert+human"
 }
 
 // authSessionPath returns the absolute path to the persisted auth session
@@ -201,6 +204,9 @@ func DecodeJWTClaims(token string) AuthClaims {
 
 	var raw struct {
 		Sub     string `json:"sub"`
+		User    string `json:"usr"`
+		Device  string `json:"dev"`
+		Tenant  string `json:"tnt"`
 		Team    string `json:"team"`
 		Role    string `json:"role"`
 		SPIFFE  string `json:"spiffe"`
@@ -211,6 +217,9 @@ func DecodeJWTClaims(token string) AuthClaims {
 	}
 	return AuthClaims{
 		Sub:          raw.Sub,
+		UserID:       raw.User,
+		DeviceID:     raw.Device,
+		Tenant:       raw.Tenant,
 		Team:         raw.Team,
 		Role:         raw.Role,
 		SPIFFE:       raw.SPIFFE,

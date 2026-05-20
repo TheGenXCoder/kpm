@@ -35,7 +35,7 @@ func TestRunLogin_PersistsSession(t *testing.T) {
 		"team":   "platform",
 		"role":   "developer",
 		"spiffe": "spiffe://c9.local/tenant/c9/human/bert",
-		"as":     "device",
+		"as":     "cert-only",
 	})
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -192,7 +192,7 @@ func TestRunWhoami_PrintsClaims(t *testing.T) {
 			Team:         "platform",
 			Role:         "developer",
 			SPIFFE:       "spiffe://x/y/z",
-			AuthStrength: "device+human",
+			AuthStrength: "cert+human",
 		},
 	})
 
@@ -207,11 +207,181 @@ func TestRunWhoami_PrintsClaims(t *testing.T) {
 		"developer",
 		"spiffe://x/y/z",
 		"JTI-WHO",
-		"device+human",
+		"cert+human",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q\nfull output:\n%s", want, out)
 		}
+	}
+}
+
+// TestRunLogin_NewStyle_PrintsUserAndDevice proves the per-spec login
+// confirmation message: when the issued JWT carries both UserID and DeviceID,
+// the stderr summary names them in the "on device" form.
+func TestRunLogin_NewStyle_PrintsUserAndDevice(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("KPM_DATA", tmp)
+
+	token := makeFakeJWT(t, map[string]any{
+		"sub":  "bert",
+		"usr":  "bert",
+		"dev":  "bert-tp-dev",
+		"tnt":  "catalyst9",
+		"team": "platform",
+		"role": "developer",
+		"as":   "cert-only",
+	})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/auth/session" || r.Method != http.MethodPost {
+			http.Error(w, "unexpected", 404)
+			return
+		}
+		json.NewEncoder(w).Encode(SessionResponse{
+			Token:     token,
+			TokenType: "Bearer",
+			ExpiresIn: 900,
+			SessionID: "JTI-LOGIN-NEW",
+		})
+	}))
+	defer srv.Close()
+
+	c, _ := NewClientInsecure(srv.URL)
+	var buf bytes.Buffer
+	if err := RunLogin(context.Background(), &buf, c); err != nil {
+		t.Fatalf("RunLogin: %v", err)
+	}
+	if !strings.Contains(buf.String(), "Logged in as bert on device bert-tp-dev") {
+		t.Errorf("expected new-style login confirmation; got: %q", buf.String())
+	}
+}
+
+// TestRunLogin_LegacyCert_PrintsLegacyHint proves the backward-compat
+// confirmation message: when UserID == DeviceID (legacy device-only cert),
+// the summary calls that out so the operator knows to re-enroll.
+func TestRunLogin_LegacyCert_PrintsLegacyHint(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("KPM_DATA", tmp)
+
+	token := makeFakeJWT(t, map[string]any{
+		"sub":  "bert-tp-dev",
+		"usr":  "bert-tp-dev",
+		"dev":  "bert-tp-dev",
+		"tnt":  "catalyst9",
+		"team": "platform",
+		"role": "developer",
+		"as":   "cert-only",
+	})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/auth/session" || r.Method != http.MethodPost {
+			http.Error(w, "unexpected", 404)
+			return
+		}
+		json.NewEncoder(w).Encode(SessionResponse{
+			Token:     token,
+			TokenType: "Bearer",
+			ExpiresIn: 900,
+			SessionID: "JTI-LOGIN-LEGACY",
+		})
+	}))
+	defer srv.Close()
+
+	c, _ := NewClientInsecure(srv.URL)
+	var buf bytes.Buffer
+	if err := RunLogin(context.Background(), &buf, c); err != nil {
+		t.Fatalf("RunLogin: %v", err)
+	}
+	if !strings.Contains(buf.String(), "Logged in as bert-tp-dev (legacy device-only cert)") {
+		t.Errorf("expected legacy login confirmation; got: %q", buf.String())
+	}
+}
+
+// TestRunWhoami_NewStyleClaims_RendersUserAndDevice proves the new whoami
+// rendering for sessions that came from a cert following the user/device
+// SPIFFE convention: both User and Device lines appear, with their distinct
+// values.
+func TestRunWhoami_NewStyleClaims_RendersUserAndDevice(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("KPM_DATA", tmp)
+
+	_ = SaveAuthSession(&AuthSession{
+		Token:     "tok",
+		TokenType: "Bearer",
+		SessionID: "JTI-NEW",
+		ExpiresAt: timeNowPlus(900),
+		Claims: AuthClaims{
+			Sub:          "bert",
+			UserID:       "bert",
+			DeviceID:     "bert-tp-dev",
+			Tenant:       "catalyst9",
+			Team:         "platform",
+			Role:         "developer",
+			SPIFFE:       "spiffe://catalyst9.local/tenant/catalyst9/user/bert/device/bert-tp-dev",
+			AuthStrength: "cert+human",
+		},
+	})
+
+	var buf bytes.Buffer
+	if err := RunWhoami(&buf); err != nil {
+		t.Fatalf("RunWhoami: %v", err)
+	}
+	out := buf.String()
+
+	// Both User and Device lines present.
+	if !strings.Contains(out, "User:           bert\n") {
+		t.Errorf("expected 'User: bert' line; got:\n%s", out)
+	}
+	if !strings.Contains(out, "Device:         bert-tp-dev\n") {
+		t.Errorf("expected 'Device: bert-tp-dev' line; got:\n%s", out)
+	}
+	// Tenant should appear when populated.
+	if !strings.Contains(out, "Tenant:         catalyst9\n") {
+		t.Errorf("expected 'Tenant: catalyst9' line; got:\n%s", out)
+	}
+	// The legacy "Identity:" line MUST NOT appear when we have a real user.
+	if strings.Contains(out, "Identity:") {
+		t.Errorf("unexpected legacy 'Identity:' line for new-style claims; got:\n%s", out)
+	}
+	if !strings.Contains(out, "cert+human") {
+		t.Errorf("expected auth strength rendered; got:\n%s", out)
+	}
+}
+
+// TestRunWhoami_LegacyClaims_RendersDeviceOnly proves the backward-compat
+// rendering: a session whose JWT carries UserID == DeviceID (the legacy
+// device-only cert path) shows the Device line and a "(none — legacy cert)"
+// User line so the operator knows to re-enroll.
+func TestRunWhoami_LegacyClaims_RendersDeviceOnly(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("KPM_DATA", tmp)
+
+	_ = SaveAuthSession(&AuthSession{
+		Token:     "tok",
+		TokenType: "Bearer",
+		SessionID: "JTI-LEGACY",
+		ExpiresAt: timeNowPlus(900),
+		Claims: AuthClaims{
+			Sub:      "bert-tp-dev",
+			UserID:   "bert-tp-dev", // server synthesised this for legacy cert
+			DeviceID: "bert-tp-dev",
+			Tenant:   "catalyst9",
+			Team:     "platform",
+			Role:     "developer",
+		},
+	})
+
+	var buf bytes.Buffer
+	if err := RunWhoami(&buf); err != nil {
+		t.Fatalf("RunWhoami: %v", err)
+	}
+	out := buf.String()
+
+	if !strings.Contains(out, "Device:         bert-tp-dev\n") {
+		t.Errorf("expected 'Device: bert-tp-dev' line; got:\n%s", out)
+	}
+	if !strings.Contains(out, "User:           (none — legacy cert)") {
+		t.Errorf("expected legacy 'User: (none — legacy cert)' line; got:\n%s", out)
 	}
 }
 

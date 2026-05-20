@@ -175,7 +175,7 @@ func TestAuthSession_AtomicRename(t *testing.T) {
 
 func TestDecodeJWTClaims(t *testing.T) {
 	// 3-segment form: header.payload.sig
-	payload := `{"sub":"bert@platform","team":"platform","role":"developer","spiffe":"spiffe://x/y/z","as":"device+human"}`
+	payload := `{"sub":"bert@platform","team":"platform","role":"developer","spiffe":"spiffe://x/y/z","as":"cert+human"}`
 	body := base64.RawURLEncoding.EncodeToString([]byte(payload))
 	token := "ignored." + body + ".sig"
 
@@ -184,7 +184,7 @@ func TestDecodeJWTClaims(t *testing.T) {
 		claims.Team != "platform" ||
 		claims.Role != "developer" ||
 		claims.SPIFFE != "spiffe://x/y/z" ||
-		claims.AuthStrength != "device+human" {
+		claims.AuthStrength != "cert+human" {
 		t.Errorf("3-segment: unexpected claims: %+v", claims)
 	}
 
@@ -207,5 +207,53 @@ func TestDecodeJWTClaims(t *testing.T) {
 
 	if got := DecodeJWTClaims(""); got != (AuthClaims{}) {
 		t.Errorf("empty token should return zero claims, got: %+v", got)
+	}
+}
+
+// TestDecodeJWTClaims_UserDeviceTenant proves the Phase 1 schema upgrade:
+// the new-style JWT payload — emitted by AgentKMS for certs that follow the
+// /tenant/<t>/user/<u>/device/<d> SPIFFE convention — round-trips through
+// DecodeJWTClaims into the User/Device/Tenant fields on AuthClaims.
+//
+// Without this, `kpm whoami` would render the new-style cert as if it were
+// the legacy single-string-identity case, defeating the multi-device-portable
+// principal model.
+func TestDecodeJWTClaims_UserDeviceTenant(t *testing.T) {
+	payload := `{"sub":"bert","usr":"bert","dev":"bert-tp-dev","tnt":"catalyst9","team":"platform","role":"developer","spiffe":"spiffe://catalyst9.local/tenant/catalyst9/user/bert/device/bert-tp-dev","as":"cert+human"}`
+	body := base64.RawURLEncoding.EncodeToString([]byte(payload))
+	token := "ignored." + body + ".sig"
+
+	got := DecodeJWTClaims(token)
+	want := AuthClaims{
+		Sub:          "bert",
+		UserID:       "bert",
+		DeviceID:     "bert-tp-dev",
+		Tenant:       "catalyst9",
+		Team:         "platform",
+		Role:         "developer",
+		SPIFFE:       "spiffe://catalyst9.local/tenant/catalyst9/user/bert/device/bert-tp-dev",
+		AuthStrength: "cert+human",
+	}
+	if got != want {
+		t.Errorf("DecodeJWTClaims mismatch\n got: %+v\nwant: %+v", got, want)
+	}
+}
+
+// TestDecodeJWTClaims_LegacyPayload_NoNewFields confirms that a JWT minted
+// by the OLD server (no usr/dev/tnt claims) still decodes to a valid
+// AuthClaims — the three new fields just stay empty, and downstream code
+// (whoami, login summary) recognises that and renders the legacy view.
+func TestDecodeJWTClaims_LegacyPayload_NoNewFields(t *testing.T) {
+	payload := `{"sub":"bert-tp-dev","team":"platform","role":"developer","as":"cert-only"}`
+	body := base64.RawURLEncoding.EncodeToString([]byte(payload))
+	token := "ignored." + body + ".sig"
+
+	got := DecodeJWTClaims(token)
+	if got.Sub != "bert-tp-dev" {
+		t.Errorf("Sub = %q, want %q", got.Sub, "bert-tp-dev")
+	}
+	if got.UserID != "" || got.DeviceID != "" || got.Tenant != "" {
+		t.Errorf("expected new-style fields empty for legacy payload; got UserID=%q DeviceID=%q Tenant=%q",
+			got.UserID, got.DeviceID, got.Tenant)
 	}
 }
