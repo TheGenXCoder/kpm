@@ -43,6 +43,7 @@ Usage:
   kpm config pull [dir]           Pull templates from AgentKMS
   kpm cred <subcommand>           Manage credential bindings (register/list/inspect/rotate/remove)
   kpm gh-app <subcommand>         Manage GitHub App installations (register/list/inspect/remove)
+  kpm webauthn <subcommand>       Manage WebAuthn credentials (register/list/remove)
   kpm scan <mode>                 Scan for exposed secrets (shell, files, logs)
   kpm update                      Update kpm to the latest release
   kpm version                     Print version
@@ -148,6 +149,39 @@ func main() {
 		client := buildClient(cfg)
 		ghAppArgs := os.Args[2:]
 		os.Exit(kpm.RunGhApp(context.Background(), os.Stdout, os.Stderr, client, ghAppArgs))
+	}
+
+	// kpm webauthn is dispatched early: it has its own flag parsing and does not
+	// share the global flag set. Route before fs.Parse.
+	if subcmd == "webauthn" {
+		cfg := &kpm.Config{}
+		if _, err := os.Stat(kpm.DefaultConfigPath()); err == nil {
+			if loaded, loadErr := kpm.LoadConfig(kpm.DefaultConfigPath()); loadErr == nil {
+				cfg = loaded
+			}
+		}
+		for i, a := range os.Args[2:] {
+			switch {
+			case a == "--server" && i+1 < len(os.Args[2:]):
+				cfg.Server = os.Args[3+i]
+			case strings.HasPrefix(a, "--server="):
+				cfg.Server = strings.TrimPrefix(a, "--server=")
+			case a == "--cert" && i+1 < len(os.Args[2:]):
+				cfg.Cert = os.Args[3+i]
+			case strings.HasPrefix(a, "--cert="):
+				cfg.Cert = strings.TrimPrefix(a, "--cert=")
+			case a == "--key" && i+1 < len(os.Args[2:]):
+				cfg.Key = os.Args[3+i]
+			case strings.HasPrefix(a, "--key="):
+				cfg.Key = strings.TrimPrefix(a, "--key=")
+			case a == "--ca" && i+1 < len(os.Args[2:]):
+				cfg.CA = os.Args[3+i]
+			case strings.HasPrefix(a, "--ca="):
+				cfg.CA = strings.TrimPrefix(a, "--ca=")
+			}
+		}
+		client := buildClient(cfg)
+		os.Exit(kpm.RunWebAuthn(context.Background(), os.Stdout, os.Stderr, client, os.Args[2:]))
 	}
 
 	// kpm cred is dispatched early: it has its own flag parsing and does not
