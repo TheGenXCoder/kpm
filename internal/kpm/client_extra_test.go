@@ -23,7 +23,7 @@ func TestAuthenticateNon200(t *testing.T) {
 	defer srv.Close()
 
 	c := &Client{baseURL: srv.URL, httpClient: srv.Client()}
-	err := c.Authenticate(context.Background())
+	_, err := c.Authenticate(context.Background())
 	if err == nil {
 		t.Fatal("expected error for non-200 auth response")
 	}
@@ -37,7 +37,7 @@ func TestAuthenticateMalformedJSON(t *testing.T) {
 	defer srv.Close()
 
 	c := &Client{baseURL: srv.URL, httpClient: srv.Client()}
-	err := c.Authenticate(context.Background())
+	_, err := c.Authenticate(context.Background())
 	if err == nil {
 		t.Fatal("expected error for malformed JSON in auth response")
 	}
@@ -50,7 +50,7 @@ func TestAuthenticateSuccess(t *testing.T) {
 	defer srv.Close()
 
 	c := &Client{baseURL: srv.URL, httpClient: srv.Client()}
-	err := c.Authenticate(context.Background())
+	_, err := c.Authenticate(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestAuthenticateSuccess(t *testing.T) {
 func TestAuthenticateServerDown(t *testing.T) {
 	// Point at a port that should refuse connections
 	c := &Client{baseURL: "http://127.0.0.1:19999", httpClient: http.DefaultClient}
-	err := c.Authenticate(context.Background())
+	_, err := c.Authenticate(context.Background())
 	if err == nil {
 		t.Fatal("expected error connecting to closed port")
 	}

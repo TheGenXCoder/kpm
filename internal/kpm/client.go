@@ -72,10 +72,37 @@ type GenericCredential struct {
 }
 
 // Client talks to an AgentKMS server over mTLS.
+//
+// Authentication state is layered:
+//
+//  1. If a persisted auth session (see auth_session.go) exists and is not
+//     expired, the client uses its token transparently.  When the persisted
+//     session is within 60s of expiry it is refreshed via /auth/refresh and
+//     the new session re-persisted.
+//
+//  2. Otherwise the client falls back to the legacy per-request flow:
+//     Authenticate() does POST /auth/session over mTLS and the resulting
+//     token lives only in memory for the duration of the process.
+//
+// The fallback's token is NEVER persisted — only sessions explicitly minted
+// by `kpm login` (which calls Authenticate then SaveAuthSession directly)
+// outlive a single process.
 type Client struct {
 	baseURL    string
 	httpClient *http.Client
 	token      string // Bearer token from POST /auth/session
+
+	// sessionLoaded gates the at-most-once attempt to load a persisted
+	// session.  Subsequent requests reuse c.token (and refresh in place
+	// when expiry < 60s away).
+	sessionLoaded bool
+
+	// expiresAt mirrors the persisted session's expiry, used to decide
+	// when to call /auth/refresh.  Zero when the in-memory token came
+	// from the fallback /auth/session call (we don't know its expiry
+	// without parsing the JWT, and we don't need to — fallback tokens
+	// are short-lived and one-shot per process).
+	expiresAt time.Time
 }
 
 // NewClient creates an AgentKMS client from cert file paths.
@@ -122,39 +149,213 @@ func NewClientInsecure(baseURL string) (*Client, error) {
 	}, nil
 }
 
+// SessionResponse is the wire shape of /auth/session and /auth/refresh.
+// Exported so that the `kpm login` command can call Authenticate and then
+// persist the full response (including expires_in + session_id) without
+// duplicating the HTTP plumbing.
+type SessionResponse struct {
+	Token     string `json:"token"`
+	TokenType string `json:"token_type"`
+	ExpiresIn int    `json:"expires_in"`
+	SessionID string `json:"session_id"`
+}
+
 // Authenticate obtains a bearer token via POST /auth/session (mTLS).
 // Called automatically on first request if no token is set.
-func (c *Client) Authenticate(ctx context.Context) error {
+//
+// On success the token is set on the client AND the parsed response is
+// returned so callers (notably `kpm login`) can persist it.
+func (c *Client) Authenticate(ctx context.Context) (*SessionResponse, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/auth/session", nil)
 	if err != nil {
-		return fmt.Errorf("build auth request: %w", err)
+		return nil, fmt.Errorf("build auth request: %w", err)
 	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("auth request: %w", err)
+		return nil, fmt.Errorf("auth request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return serverError(resp, "authenticate")
+		return nil, serverError(resp, "authenticate")
 	}
 
-	var body struct {
-		Token string `json:"token"`
-	}
+	var body SessionResponse
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return fmt.Errorf("decode auth response: %w", err)
+		return nil, fmt.Errorf("decode auth response: %w", err)
 	}
 	c.token = body.Token
-	return nil
+	if body.ExpiresIn > 0 {
+		c.expiresAt = time.Now().Add(time.Duration(body.ExpiresIn) * time.Second)
+	}
+	return &body, nil
 }
 
-func (c *Client) ensureAuth(ctx context.Context) error {
+// Refresh exchanges the current bearer token for a fresh one via
+// POST /auth/refresh.  Called automatically when a persisted session is
+// loaded with less than 60s of life left.
+//
+// On success the in-memory token is replaced and the parsed response is
+// returned so `kpm login`/the auto-refresh path can persist it.
+func (c *Client) Refresh(ctx context.Context) (*SessionResponse, error) {
 	if c.token == "" {
-		return c.Authenticate(ctx)
+		return nil, fmt.Errorf("refresh: no bearer token to refresh")
 	}
-	return nil
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/auth/refresh", nil)
+	if err != nil {
+		return nil, fmt.Errorf("build refresh request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("refresh request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, serverError(resp, "refresh")
+	}
+
+	var body SessionResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, fmt.Errorf("decode refresh response: %w", err)
+	}
+	c.token = body.Token
+	if body.ExpiresIn > 0 {
+		c.expiresAt = time.Now().Add(time.Duration(body.ExpiresIn) * time.Second)
+	}
+	return &body, nil
+}
+
+// RevokeCurrent issues POST /auth/revoke with the current bearer token.
+// A 401 from the server is treated as "already revoked / expired" and
+// returned as a sentinel so callers can proceed idempotently.
+func (c *Client) RevokeCurrent(ctx context.Context) error {
+	if c.token == "" {
+		return fmt.Errorf("revoke: no bearer token to revoke")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/auth/revoke", nil)
+	if err != nil {
+		return fmt.Errorf("build revoke request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("revoke request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	switch resp.StatusCode {
+	case http.StatusNoContent, http.StatusOK:
+		return nil
+	case http.StatusUnauthorized:
+		// Token already expired or unknown — treat as already revoked.
+		return ErrAlreadyRevoked
+	default:
+		return serverError(resp, "revoke")
+	}
+}
+
+// ErrAlreadyRevoked is returned by RevokeCurrent when the server responds
+// 401, indicating the token has already expired or been revoked.  Callers
+// should treat this as a successful idempotent revoke.
+var ErrAlreadyRevoked = fmt.Errorf("token already revoked or expired")
+
+// SetToken sets the bearer token directly without doing /auth/session.
+// Used by the persisted-session path to "adopt" a token loaded from disk.
+// expiresAt is the absolute expiry of the token (used to decide whether
+// to refresh on the next request).
+func (c *Client) SetToken(token string, expiresAt time.Time) {
+	c.token = token
+	c.expiresAt = expiresAt
+	c.sessionLoaded = true
+}
+
+// ensureAuth makes sure the client has a usable bearer token before issuing
+// a request.  Precedence:
+//
+//  1. If we already have a token in memory and it isn't near expiry, use it.
+//  2. If we have one within 60s of expiry, refresh it and persist the new
+//     session (only when sessionLoaded — i.e. token came from disk).
+//  3. Otherwise, try once to load a persisted session from disk.
+//  4. Falling back to a fresh per-request /auth/session call.  This token
+//     is NOT persisted.
+//
+// The 60-second threshold balances "don't waste an RTT preemptively" against
+// "don't ship a request that's going to come back 401."
+func (c *Client) ensureAuth(ctx context.Context) error {
+	const refreshThreshold = 60 * time.Second
+
+	// (1) In-memory token still good?
+	if c.token != "" {
+		if c.expiresAt.IsZero() || time.Until(c.expiresAt) > refreshThreshold {
+			return nil
+		}
+		// (2) Within the refresh window — only refresh when the token came
+		// from a persisted session.  Fallback tokens have an empty expiresAt
+		// and never reach this branch.
+		if c.sessionLoaded {
+			sr, err := c.Refresh(ctx)
+			if err != nil {
+				// Refresh failed — fall through to a fresh /auth/session.
+				c.token = ""
+				c.expiresAt = time.Time{}
+				return c.fallbackAuth(ctx)
+			}
+			// Persist the refreshed session so subsequent commands pick it up.
+			_ = SaveAuthSession(&AuthSession{
+				Token:     sr.Token,
+				TokenType: sr.TokenType,
+				SessionID: sr.SessionID,
+				ExpiresAt: time.Now().Add(time.Duration(sr.ExpiresIn) * time.Second),
+				Claims:    DecodeJWTClaims(sr.Token),
+			})
+			return nil
+		}
+		// In-memory only and near-expiry: just re-authenticate.
+		return c.fallbackAuth(ctx)
+	}
+
+	// (3) First call this process — try the persisted session.
+	if !c.sessionLoaded {
+		c.sessionLoaded = true
+		if s, err := LoadAuthSession(); err == nil {
+			c.token = s.Token
+			c.expiresAt = s.ExpiresAt
+			// If the loaded session is near expiry, refresh now.
+			if time.Until(c.expiresAt) <= refreshThreshold {
+				sr, rerr := c.Refresh(ctx)
+				if rerr == nil {
+					_ = SaveAuthSession(&AuthSession{
+						Token:     sr.Token,
+						TokenType: sr.TokenType,
+						SessionID: sr.SessionID,
+						ExpiresAt: time.Now().Add(time.Duration(sr.ExpiresIn) * time.Second),
+						Claims:    DecodeJWTClaims(sr.Token),
+					})
+					return nil
+				}
+				// Refresh failed — discard and fall back.
+				c.token = ""
+				c.expiresAt = time.Time{}
+			} else {
+				return nil
+			}
+		}
+	}
+
+	// (4) Fallback: transient per-request /auth/session.
+	return c.fallbackAuth(ctx)
+}
+
+// fallbackAuth performs a one-shot /auth/session call without persisting
+// the resulting session.
+func (c *Client) fallbackAuth(ctx context.Context) error {
+	_, err := c.Authenticate(ctx)
+	return err
 }
 
 func (c *Client) doGet(ctx context.Context, url string) (*http.Response, error) {

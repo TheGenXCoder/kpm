@@ -11,7 +11,7 @@ func TestAuthenticateInvalidURL(t *testing.T) {
 		baseURL:    "http://localhost\x00invalid",
 		httpClient: nil,
 	}
-	err := c.Authenticate(context.Background())
+	_, err := c.Authenticate(context.Background())
 	if err == nil {
 		t.Fatal("expected error for invalid base URL in Authenticate")
 	}
