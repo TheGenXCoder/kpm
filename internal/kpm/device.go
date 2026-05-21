@@ -25,8 +25,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"text/tabwriter"
+	"time"
 )
 
 // ── wire types ────────────────────────────────────────────────────────────────
@@ -90,6 +92,8 @@ func RunDevice(ctx context.Context, stdout, stderr io.Writer, client *Client, ce
 	dc := &clientDevice{c: client}
 
 	switch sub {
+	case "add":
+		return runDeviceAdd(ctx, stdout, stderr, client, rest)
 	case "list":
 		return runDeviceList(ctx, stdout, stderr, dc, certsDir, rest)
 	case "revoke":
@@ -106,8 +110,12 @@ func RunDevice(ctx context.Context, stdout, stderr io.Writer, client *Client, ce
 const deviceUsage = `kpm device — manage enrolled device certificates
 
 Subcommands:
+  add <device-name> [flags]      Request a bootstrap token for a new device
   list [--json]                  List all enrolled devices for this account
   revoke <device-name> [flags]   Revoke a device certificate
+
+Flags for add:
+  --ttl <duration>   Token lifetime (default: 1h; formats: 30m, 2h, etc.)
 
 Flags for list:
   --json    Machine-readable JSON output
@@ -312,6 +320,82 @@ func (c *Client) ListCerts(ctx context.Context) ([]DeviceCertEntry, error) {
 		return nil, fmt.Errorf("decode cert list: %w", err)
 	}
 	return body.Certs, nil
+}
+
+// ── kpm device add ───────────────────────────────────────────────────────────
+
+// RunDeviceAdd implements `kpm device add`.
+// Exported so tests in external packages can call it directly.
+func RunDeviceAdd(ctx context.Context, stdout, stderr io.Writer, client *Client, args []string) int {
+	return runDeviceAdd(ctx, stdout, stderr, client, args)
+}
+
+// deviceNameRegex validates device names: lowercase letters, digits, hyphens.
+// Must be 1-64 characters long.
+var deviceNameRegex = regexp.MustCompile(`^[a-z0-9-]{1,64}$`)
+
+func runDeviceAdd(ctx context.Context, stdout, stderr io.Writer, client *Client, args []string) int {
+	fs := flag.NewFlagSet("device add", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	ttlFlag := fs.String("ttl", "1h", "token lifetime (e.g., 30m, 2h)")
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
+
+	if fs.NArg() == 0 {
+		fmt.Fprintln(stderr, "error: device name required\nusage: kpm device add <device-name> [--ttl <duration>]")
+		return 1
+	}
+
+	deviceName := fs.Arg(0)
+
+	// Validate device name client-side before contacting the server.
+	if !deviceNameRegex.MatchString(deviceName) {
+		fmt.Fprintf(stderr, "error: invalid device name %q\n", deviceName)
+		fmt.Fprintln(stderr, "device name must be 1-64 characters (lowercase letters, digits, hyphens)")
+		return 2
+	}
+
+	// Parse TTL.
+	ttl, err := time.ParseDuration(*ttlFlag)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: invalid ttl %q: %v\n", *ttlFlag, err)
+		return 2
+	}
+
+	// Load persisted session to check if logged in.
+	session, err := LoadAuthSession()
+	if err != nil {
+		fmt.Fprintln(stderr, "error: run 'kpm login' first")
+		return 1
+	}
+
+	// Set the session token on the client so RequestBootstrapToken can use it.
+	client.SetToken(session.Token, session.ExpiresAt)
+
+	// Request the bootstrap token.
+	result, err := client.RequestBootstrapToken(ctx, deviceName, ttl)
+	if err != nil {
+		msg := err.Error()
+		// Check for 403 (auth_strength < cert+human).
+		if strings.Contains(msg, "403") || strings.Contains(msg, "forbidden") || strings.Contains(msg, "FORBIDDEN") {
+			fmt.Fprintln(stderr, "error: minting a bootstrap token requires step-up — run 'kpm login --step-up' first")
+			return 1
+		}
+		fmt.Fprintf(stderr, "error: %v\n", err)
+		return 1
+	}
+
+	// Print the result.
+	fmt.Fprintf(stdout, "Bootstrap token for device %q (valid until %s):\n\n", deviceName, result.ExpiresAt.Format(time.RFC3339))
+	fmt.Fprintf(stdout, "    %s\n\n", result.Token)
+	fmt.Fprintf(stdout, "On the new machine:\n\n")
+	fmt.Fprintf(stdout, "    kpm enroll --user %s --device %s %s\n\n", session.Claims.UserID, deviceName, result.Token)
+	fmt.Fprintln(stdout, "The new machine also needs:")
+	fmt.Fprintln(stdout, "  - kpm installed")
+	fmt.Fprintln(stdout, "  - ~/.kpm/config.yaml pointing at this AgentKMS server")
+	fmt.Fprintln(stdout, "  - ~/.kpm/certs/ca.crt (copy from this machine; the CA cert is public-safe)")
+	return 0
 }
 
 // RevokeCert calls POST /auth/certificate/revoke.

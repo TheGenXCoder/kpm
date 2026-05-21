@@ -720,3 +720,42 @@ func (c *Client) FetchGeneric(ctx context.Context, path string) (*GenericCredent
 		TTLSeconds: body.TTLSeconds,
 	}, nil
 }
+
+// BootstrapTokenResponse is the response from POST /auth/bootstrap/issue.
+type BootstrapTokenResponse struct {
+	Token     string    `json:"bootstrap_token"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// RequestBootstrapToken requests a bootstrap token for a new device.
+// The caller must have a persisted session token with sufficient auth strength.
+func (c *Client) RequestBootstrapToken(ctx context.Context, devicePattern string, ttl time.Duration) (*BootstrapTokenResponse, error) {
+	if err := c.ensureAuth(ctx); err != nil {
+		return nil, err
+	}
+
+	body := struct {
+		DeviceNamePattern string `json:"device_name_pattern"`
+		TTLSeconds        int    `json:"ttl_seconds"`
+	}{
+		DeviceNamePattern: devicePattern,
+		TTLSeconds:        int(ttl.Seconds()),
+	}
+
+	resp, err := c.doPost(ctx, c.baseURL+"/auth/bootstrap/issue", body)
+	if err != nil {
+		return nil, fmt.Errorf("request bootstrap token: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, serverError(resp, "request bootstrap token")
+	}
+
+	var result BootstrapTokenResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode bootstrap token response: %w", err)
+	}
+
+	return &result, nil
+}

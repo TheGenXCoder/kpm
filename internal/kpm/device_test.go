@@ -308,3 +308,278 @@ func TestDeviceRevokeHTTPMock(t *testing.T) {
 		t.Errorf("server received device_name=%q, want alpha", revokedBody["device_name"])
 	}
 }
+
+// ── device add tests ──────────────────────────────────────────────────────────
+
+func TestRunDeviceAdd_HappyPath(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("KPM_DATA", tmp)
+
+	// Pre-populate a persisted session with auth_strength = cert+human.
+	expiresAt := time.Now().Add(15 * time.Minute)
+	if err := kpm.SaveAuthSession(&kpm.AuthSession{
+		Token:     "test-session-token",
+		TokenType: "Bearer",
+		SessionID: "test-jti",
+		ExpiresAt: expiresAt,
+		Claims: kpm.AuthClaims{
+			UserID:       "bert",
+			AuthStrength: "cert+human",
+		},
+	}); err != nil {
+		t.Fatalf("SaveAuthSession: %v", err)
+	}
+
+	// Mock server responds with a bootstrap token.
+	expectedToken := "78ab" + strings.Repeat("cd", 31) + "0f9" // 64 hex chars
+	expectedExpiry := "2026-05-20T22:14:30Z"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/auth/bootstrap/issue" && r.Method == http.MethodPost:
+			// Verify the request body.
+			var body struct {
+				DeviceNamePattern string `json:"device_name_pattern"`
+				TTLSeconds        int    `json:"ttl_seconds"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, "bad body", http.StatusBadRequest)
+				return
+			}
+			if body.DeviceNamePattern != "bert-desktop" {
+				http.Error(w, "wrong device name", http.StatusBadRequest)
+				return
+			}
+			if body.TTLSeconds != 3600 { // default 1h
+				http.Error(w, "wrong ttl", http.StatusBadRequest)
+				return
+			}
+			// Return the token.
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{
+				"bootstrap_token": expectedToken,
+				"expires_at":      expectedExpiry,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	client, _ := kpm.NewClientInsecure(srv.URL)
+	var stdout, stderr bytes.Buffer
+
+	code := kpm.RunDeviceAdd(context.Background(), &stdout, &stderr, client,
+		[]string{"bert-desktop"})
+
+	if code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
+	}
+
+	out := stdout.String()
+
+	// Verify output contains the token.
+	if !strings.Contains(out, expectedToken) {
+		t.Errorf("token not found in output:\n%s", out)
+	}
+
+	// Verify output contains the expiry.
+	if !strings.Contains(out, expectedExpiry) {
+		t.Errorf("expiry not found in output:\n%s", out)
+	}
+
+	// Verify output contains the kpm enroll example.
+	if !strings.Contains(out, "kpm enroll") {
+		t.Errorf("kpm enroll example not found in output:\n%s", out)
+	}
+
+	// Verify it uses the UserID from the session.
+	if !strings.Contains(out, "bert") {
+		t.Errorf("user ID not found in output:\n%s", out)
+	}
+
+	// Verify it uses the device name.
+	if !strings.Contains(out, "bert-desktop") {
+		t.Errorf("device name not found in output:\n%s", out)
+	}
+}
+
+func TestRunDeviceAdd_NoSession(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("KPM_DATA", tmp)
+	// Don't save a session, so LoadAuthSession will fail.
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r) // Server should never be called.
+	}))
+	defer srv.Close()
+
+	client, _ := kpm.NewClientInsecure(srv.URL)
+	var stdout, stderr bytes.Buffer
+
+	code := kpm.RunDeviceAdd(context.Background(), &stdout, &stderr, client,
+		[]string{"bert-desktop"})
+
+	if code == 0 {
+		t.Fatal("expected non-zero exit when no session exists")
+	}
+
+	if !strings.Contains(stderr.String(), "kpm login") {
+		t.Errorf("want 'kpm login' hint in stderr, got: %s", stderr.String())
+	}
+}
+
+func TestRunDeviceAdd_ServerForbidden(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("KPM_DATA", tmp)
+
+	// Pre-populate a persisted session with cert-only strength (not cert+human).
+	expiresAt := time.Now().Add(15 * time.Minute)
+	if err := kpm.SaveAuthSession(&kpm.AuthSession{
+		Token:     "test-session-token",
+		TokenType: "Bearer",
+		SessionID: "test-jti",
+		ExpiresAt: expiresAt,
+		Claims: kpm.AuthClaims{
+			UserID:       "bert",
+			AuthStrength: "cert-only", // Not cert+human
+		},
+	}); err != nil {
+		t.Fatalf("SaveAuthSession: %v", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/auth/bootstrap/issue" && r.Method == http.MethodPost:
+			// Return 403.
+			http.Error(w, `{"error":"auth_strength too weak","code":"FORBIDDEN"}`, http.StatusForbidden)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	client, _ := kpm.NewClientInsecure(srv.URL)
+	var stdout, stderr bytes.Buffer
+
+	code := kpm.RunDeviceAdd(context.Background(), &stdout, &stderr, client,
+		[]string{"bert-desktop"})
+
+	if code == 0 {
+		t.Fatal("expected non-zero exit for 403")
+	}
+
+	if !strings.Contains(stderr.String(), "step-up") {
+		t.Errorf("want 'step-up' hint in stderr, got: %s", stderr.String())
+	}
+}
+
+func TestRunDeviceAdd_InvalidDeviceName(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("KPM_DATA", tmp)
+
+	// Pre-populate a persisted session.
+	expiresAt := time.Now().Add(15 * time.Minute)
+	if err := kpm.SaveAuthSession(&kpm.AuthSession{
+		Token:     "test-session-token",
+		TokenType: "Bearer",
+		SessionID: "test-jti",
+		ExpiresAt: expiresAt,
+		Claims: kpm.AuthClaims{
+			UserID:       "bert",
+			AuthStrength: "cert+human",
+		},
+	}); err != nil {
+		t.Fatalf("SaveAuthSession: %v", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("server should not be called for invalid device name")
+	}))
+	defer srv.Close()
+
+	client, _ := kpm.NewClientInsecure(srv.URL)
+	var stdout, stderr bytes.Buffer
+
+	// Test with uppercase letters (invalid).
+	code := kpm.RunDeviceAdd(context.Background(), &stdout, &stderr, client,
+		[]string{"BAD-NAME"})
+
+	if code != 2 {
+		t.Fatalf("expected exit code 2 for invalid name, got %d", code)
+	}
+
+	if !strings.Contains(stderr.String(), "invalid device name") {
+		t.Errorf("want 'invalid device name' message, got: %s", stderr.String())
+	}
+
+	// Test with spaces (invalid).
+	var stdout2, stderr2 bytes.Buffer
+	code = kpm.RunDeviceAdd(context.Background(), &stdout2, &stderr2, client,
+		[]string{"bad name with spaces"})
+
+	if code != 2 {
+		t.Fatalf("expected exit code 2 for name with spaces, got %d", code)
+	}
+}
+
+func TestRunDeviceAdd_CustomTTL(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("KPM_DATA", tmp)
+
+	// Pre-populate a persisted session.
+	expiresAt := time.Now().Add(15 * time.Minute)
+	if err := kpm.SaveAuthSession(&kpm.AuthSession{
+		Token:     "test-session-token",
+		TokenType: "Bearer",
+		SessionID: "test-jti",
+		ExpiresAt: expiresAt,
+		Claims: kpm.AuthClaims{
+			UserID:       "bert",
+			AuthStrength: "cert+human",
+		},
+	}); err != nil {
+		t.Fatalf("SaveAuthSession: %v", err)
+	}
+
+	// Track the TTL sent by the client.
+	var receivedTTL int
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/auth/bootstrap/issue" && r.Method == http.MethodPost:
+			var body struct {
+				DeviceNamePattern string `json:"device_name_pattern"`
+				TTLSeconds        int    `json:"ttl_seconds"`
+			}
+			json.NewDecoder(r.Body).Decode(&body)
+			receivedTTL = body.TTLSeconds
+
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{
+				"bootstrap_token": "test-token",
+				"expires_at":      "2026-05-20T22:14:30Z",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	client, _ := kpm.NewClientInsecure(srv.URL)
+	var stdout, stderr bytes.Buffer
+
+	// Use a custom TTL: 30 minutes.
+	// Note: flags must come before the positional argument.
+	code := kpm.RunDeviceAdd(context.Background(), &stdout, &stderr, client,
+		[]string{"--ttl", "30m", "bert-desktop"})
+
+	if code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
+	}
+
+	// Verify the TTL was sent correctly (30m = 1800 seconds).
+	if receivedTTL != 1800 {
+		t.Errorf("expected TTL 1800, got %d", receivedTTL)
+	}
+}
