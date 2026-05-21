@@ -19,6 +19,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -376,9 +377,8 @@ func runDeviceAdd(ctx context.Context, stdout, stderr io.Writer, client *Client,
 	// Request the bootstrap token.
 	result, err := client.RequestBootstrapToken(ctx, deviceName, ttl)
 	if err != nil {
-		msg := err.Error()
-		// Check for 403 (auth_strength < cert+human).
-		if strings.Contains(msg, "403") || strings.Contains(msg, "forbidden") || strings.Contains(msg, "FORBIDDEN") {
+		// Check for auth strength insufficient (403).
+		if errors.Is(err, ErrAuthStrengthInsufficient) {
 			fmt.Fprintln(stderr, "error: minting a bootstrap token requires step-up — run 'kpm login --step-up' first")
 			return 1
 		}

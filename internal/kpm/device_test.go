@@ -469,8 +469,12 @@ func TestRunDeviceAdd_ServerForbidden(t *testing.T) {
 		t.Fatal("expected non-zero exit for 403")
 	}
 
-	if !strings.Contains(stderr.String(), "step-up") {
-		t.Errorf("want 'step-up' hint in stderr, got: %s", stderr.String())
+	stderrMsg := stderr.String()
+	if !strings.Contains(stderrMsg, "requires step-up") {
+		t.Errorf("want 'requires step-up' in stderr, got: %s", stderrMsg)
+	}
+	if !strings.Contains(stderrMsg, "kpm login --step-up") {
+		t.Errorf("want 'kpm login --step-up' in stderr, got: %s", stderrMsg)
 	}
 }
 

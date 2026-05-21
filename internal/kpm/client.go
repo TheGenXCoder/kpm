@@ -285,6 +285,11 @@ func (c *Client) RevokeCurrent(ctx context.Context) error {
 // should treat this as a successful idempotent revoke.
 var ErrAlreadyRevoked = fmt.Errorf("token already revoked or expired")
 
+// ErrAuthStrengthInsufficient is returned by RequestBootstrapToken when the
+// server responds 403, indicating the session lacks sufficient auth strength
+// (e.g., cert-only instead of cert+human).
+var ErrAuthStrengthInsufficient = fmt.Errorf("auth strength insufficient — step up to cert+human")
+
 // SetToken sets the bearer token directly without doing /auth/session.
 // Used by the persisted-session path to "adopt" a token loaded from disk.
 // expiresAt is the absolute expiry of the token (used to decide whether
@@ -729,6 +734,7 @@ type BootstrapTokenResponse struct {
 
 // RequestBootstrapToken requests a bootstrap token for a new device.
 // The caller must have a persisted session token with sufficient auth strength.
+// Returns ErrAuthStrengthInsufficient when the server responds 403.
 func (c *Client) RequestBootstrapToken(ctx context.Context, devicePattern string, ttl time.Duration) (*BootstrapTokenResponse, error) {
 	if err := c.ensureAuth(ctx); err != nil {
 		return nil, err
@@ -749,6 +755,9 @@ func (c *Client) RequestBootstrapToken(ctx context.Context, devicePattern string
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusForbidden {
+			return nil, fmt.Errorf("request bootstrap token: %w", ErrAuthStrengthInsufficient)
+		}
 		return nil, serverError(resp, "request bootstrap token")
 	}
 
