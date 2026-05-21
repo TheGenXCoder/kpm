@@ -507,7 +507,8 @@ type webAuthnCredential struct {
 	Name      string `json:"name,omitempty"`
 	CreatedAt string `json:"created_at,omitempty"`
 	LastUsed  string `json:"last_used_at,omitempty"`
-	Type      string `json:"type,omitempty"` // "platform" | "cross-platform" | ""
+	Type      string `json:"authenticator_type,omitempty"` // "platform" | "cross-platform" | ""
+	AAGUID    string `json:"aaguid,omitempty"`
 }
 
 func runWebAuthnList(ctx context.Context, stdout, stderr io.Writer, client *Client, args []string) int {
@@ -542,12 +543,15 @@ func runWebAuthnList(ctx context.Context, stdout, stderr io.Writer, client *Clie
 		return 1
 	}
 
-	var creds []webAuthnCredential
-	if err := json.NewDecoder(resp.Body).Decode(&creds); err != nil {
+	var body struct {
+		Credentials []webAuthnCredential `json:"credentials"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		fmt.Fprintf(stderr, "error: decode response: %v\n", err)
 		return 1
 	}
 
+	creds := body.Credentials
 	if len(creds) == 0 {
 		fmt.Fprintln(stdout, "No WebAuthn credentials registered. Add one with: kpm webauthn register")
 		return 0
