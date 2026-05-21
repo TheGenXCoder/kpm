@@ -196,6 +196,12 @@ func TestWebAuthnRegister_CredentialForwardedToFinish(t *testing.T) {
 // ── list: graceful degrade when server returns 404 ───────────────────────────
 
 func TestWebAuthnList_GracefulDegradeOn404(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("KPM_DATA", tmp)
+	// Pre-save a session so ensureAuth doesn't try to hit the mock server.
+	tok := makeFakeJWT(t, map[string]any{"sub": "list-test"})
+	_ = SaveAuthSession(&AuthSession{Token: tok, TokenType: "Bearer", SessionID: "s1", ExpiresAt: timeNowPlus(900), Claims: AuthClaims{Sub: "list-test"}})
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 	}))
@@ -215,6 +221,12 @@ func TestWebAuthnList_GracefulDegradeOn404(t *testing.T) {
 // ── remove: graceful degrade when server returns 404 ─────────────────────────
 
 func TestWebAuthnRemove_GracefulDegradeOn404(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("KPM_DATA", tmp)
+	// Pre-save a session so ensureAuth doesn't try to hit the mock server.
+	tok := makeFakeJWT(t, map[string]any{"sub": "remove-test"})
+	_ = SaveAuthSession(&AuthSession{Token: tok, TokenType: "Bearer", SessionID: "s2", ExpiresAt: timeNowPlus(900), Claims: AuthClaims{Sub: "remove-test"}})
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Return 404 with no credential mention — simulates missing endpoint.
 		http.Error(w, "not found", http.StatusNotFound)
@@ -261,7 +273,7 @@ func TestBuildWebAuthnRegisterURL_Shape(t *testing.T) {
 	challenge := json.RawMessage(`{"challenge":"dGVzdA","rp":{"name":"Test"}}`)
 	rawURL := buildWebAuthnRegisterURL("127.0.0.1:12345", challenge)
 
-	if !strings.HasPrefix(rawURL, "http://127.0.0.1:12345/") {
+	if !strings.HasPrefix(rawURL, "http://localhost:12345/") {
 		t.Errorf("unexpected URL prefix: %s", rawURL)
 	}
 	if !strings.Contains(rawURL, "challenge=") {
@@ -386,6 +398,92 @@ func TestRunWebAuthnRegister_AttachesBearerFromSession(t *testing.T) {
 	}
 }
 
+// ── localhostURL: host rewriting ──────────────────────────────────────────────
+
+func TestLocalhostURL_RewritesHost(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"127.0.0.1:38291", "localhost:38291"},
+		{"127.0.0.1:0", "localhost:0"},
+		{"", ""},
+	}
+	for _, tc := range cases {
+		got := localhostURL(tc.in)
+		if got != tc.want {
+			t.Errorf("localhostURL(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestRunWebAuthnRegister_OpensLocalhostNot127 verifies that the URL printed to
+// stderr (and handed to the browser) uses "localhost" as the host, not
+// "127.0.0.1".  A correct origin of http://localhost:<port> is required for
+// the browser WebAuthn ceremony to match the server's RPID of "localhost".
+func TestRunWebAuthnRegister_OpensLocalhostNot127(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("KPM_DATA", tmp)
+
+	tok := makeFakeJWT(t, map[string]any{"sub": "frank"})
+	if err := SaveAuthSession(&AuthSession{
+		Token:     tok,
+		TokenType: "Bearer",
+		SessionID: "sess-localhost-test",
+		ExpiresAt: timeNowPlus(900),
+		Claims:    AuthClaims{Sub: "frank"},
+	}); err != nil {
+		t.Fatalf("SaveAuthSession: %v", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/auth/webauthn/register/begin" && r.Method == http.MethodPost:
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"challenge":"dGVzdA","rp":{"name":"Test"},"user":{"id":"dXNlcg","name":"frank","displayName":"Frank"},"pubKeyCredParams":[{"type":"public-key","alg":-7}]}`)) //nolint:errcheck
+		case r.URL.Path == "/auth/webauthn/register/finish" && r.Method == http.MethodPost:
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"status":"registered","credential_id":"cred-frank"}`)) //nolint:errcheck
+		default:
+			http.Error(w, "unexpected "+r.URL.Path, http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	c, _ := NewClientInsecure(srv.URL)
+
+	var stderrBuf bytes.Buffer
+	runDone := make(chan int, 1)
+	go func() {
+		runDone <- RunWebAuthn(context.Background(), io.Discard, &stderrBuf, c, []string{"register", "--type", "passkey", "--name", "Test"})
+	}()
+
+	// Wait for the "Opening browser" line in stderr.
+	localURL := waitForLocalURL(t, &stderrBuf, 5*time.Second)
+
+	// The URL must use localhost, not 127.0.0.1.
+	if strings.HasPrefix(localURL, "http://127.0.0.1:") {
+		t.Errorf("browser URL uses 127.0.0.1; want localhost. URL: %s", localURL)
+	}
+	if !strings.HasPrefix(localURL, "http://localhost:") {
+		t.Errorf("browser URL does not start with http://localhost:. URL: %s", localURL)
+	}
+
+	// Complete the ceremony so RunWebAuthn exits cleanly.
+	fakeCred := `{"id":"cred-frank","rawId":"ZmFrZQ","type":"public-key","response":{"clientDataJSON":"eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIn0","attestationObject":"o2M"}}`
+	resp, err := http.Post(localURL+"/callback", "application/json", strings.NewReader(fakeCred)) //nolint:noctx
+	if err != nil {
+		t.Fatalf("POST /callback: %v", err)
+	}
+	resp.Body.Close()
+
+	select {
+	case <-runDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("RunWebAuthn timed out")
+	}
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 // runRegisterCeremony drives the register flow against a mock AgentKMS server
@@ -446,14 +544,14 @@ func runRegisterCeremony(t *testing.T, callerID string, extraArgs ...string) (be
 	return beginBody, finishBody
 }
 
-// waitForLocalURL polls stderrBuf until it contains a http://127.0.0.1:PORT/
+// waitForLocalURL polls stderrBuf until it contains a http://localhost:PORT/
 // URL, then returns the scheme+host portion.
 func waitForLocalURL(t *testing.T, buf *bytes.Buffer, timeout time.Duration) string {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		out := buf.String()
-		if idx := strings.Index(out, "http://127.0.0.1:"); idx >= 0 {
+		if idx := strings.Index(out, "http://localhost:"); idx >= 0 {
 			rest := out[idx:]
 			end := strings.IndexAny(rest, " \t\n\r")
 			if end < 0 {

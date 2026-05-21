@@ -126,7 +126,7 @@ func TestBuildStepUpURL_ChallengeRoundTrips(t *testing.T) {
 
 	rawURL := buildStepUpURL(addr, challengeJSON)
 
-	if !strings.HasPrefix(rawURL, "http://127.0.0.1:39999/") {
+	if !strings.HasPrefix(rawURL, "http://localhost:39999/") {
 		t.Errorf("URL has unexpected prefix: %s", rawURL)
 	}
 	if !strings.Contains(rawURL, "challenge=") {
@@ -172,6 +172,115 @@ func TestBuildStepUpURL_Base64URLNoPadding(t *testing.T) {
 	// url.QueryEscape encodes '=' as '%3D', so check for neither.
 	if strings.Contains(encoded, "=") {
 		t.Errorf("encoded challenge contains raw '=' padding (not URL-safe): %s", encoded)
+	}
+}
+
+// ── localhostURL: step-up browser URL uses localhost, not 127.0.0.1 ──────────
+
+// TestBuildStepUpURL_UsesLocalhost verifies that buildStepUpURL rewrites the
+// "127.0.0.1:<port>" bind address to "localhost:<port>" so the browser's
+// WebAuthn ceremony sees effective domain "localhost" (matching the server RPID).
+func TestBuildStepUpURL_UsesLocalhost(t *testing.T) {
+	challengeJSON := json.RawMessage(`{"challenge":"dGVzdA","timeout":60000}`)
+	rawURL := buildStepUpURL("127.0.0.1:12345", challengeJSON)
+
+	if strings.HasPrefix(rawURL, "http://127.0.0.1:") {
+		t.Errorf("step-up URL uses 127.0.0.1; want localhost. URL: %s", rawURL)
+	}
+	if !strings.HasPrefix(rawURL, "http://localhost:12345/") {
+		t.Errorf("step-up URL does not start with http://localhost:12345/. URL: %s", rawURL)
+	}
+}
+
+// TestRunStepUp_OpensLocalhostNot127 drives RunStepUp end-to-end and asserts
+// the URL printed to stderr (and handed to the browser) uses "localhost".
+func TestRunStepUp_OpensLocalhostNot127(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("KPM_DATA", tmp)
+
+	tok := makeFakeJWT(t, map[string]any{"sub": "grace", "as": "cert-only"})
+	_ = SaveAuthSession(&AuthSession{
+		Token:     tok,
+		TokenType: "Bearer",
+		SessionID: "sess-lh-test",
+		ExpiresAt: timeNowPlus(900),
+		Claims:    AuthClaims{Sub: "grace", AuthStrength: "cert-only"},
+	})
+
+	upgradedTok := makeFakeJWT(t, map[string]any{"sub": "grace", "as": "cert+human"})
+
+	agentSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/auth/webauthn/auth/begin" && r.Method == http.MethodPost:
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"challenge":"dGVzdA","timeout":60000,"rpId":"localhost","allowCredentials":[]}`)) //nolint:errcheck
+		case r.URL.Path == "/auth/webauthn/auth/finish" && r.Method == http.MethodPost:
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(SessionResponse{ //nolint:errcheck
+				Token: upgradedTok, TokenType: "Bearer", ExpiresIn: 3600, SessionID: "sess-lh-upgraded",
+			})
+		default:
+			http.Error(w, "unexpected "+r.URL.Path, http.StatusNotFound)
+		}
+	}))
+	defer agentSrv.Close()
+
+	c, _ := NewClientInsecure(agentSrv.URL)
+	var stderrBuf bytes.Buffer
+	runDone := make(chan error, 1)
+	go func() { runDone <- RunStepUp(context.Background(), &stderrBuf, c) }()
+
+	// Poll until the "Opening browser" URL appears in stderr.
+	deadline := time.Now().Add(5 * time.Second)
+	var browserURL string
+	for time.Now().Before(deadline) {
+		out := stderrBuf.String()
+		if idx := strings.Index(out, "http://localhost:"); idx >= 0 {
+			rest := out[idx:]
+			end := strings.IndexAny(rest, " \t\n\r")
+			if end < 0 {
+				end = len(rest)
+			}
+			browserURL = rest[:end]
+			break
+		}
+		if strings.Contains(out, "http://127.0.0.1:") {
+			t.Fatalf("step-up URL uses 127.0.0.1; want localhost\nstderr: %s", out)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if browserURL == "" {
+		select {
+		case err := <-runDone:
+			t.Fatalf("RunStepUp exited before server ready: %v\nstderr: %s", err, stderrBuf.String())
+		default:
+		}
+		t.Fatalf("localhost URL not found in stderr after 5s\nstderr: %s", stderrBuf.String())
+	}
+
+	if !strings.HasPrefix(browserURL, "http://localhost:") {
+		t.Errorf("browser URL = %q, want http://localhost:<port>/...", browserURL)
+	}
+
+	// Drive the ceremony to completion so the goroutine exits cleanly.
+	if qi := strings.Index(browserURL, "?"); qi >= 0 {
+		browserURL = browserURL[:qi]
+	}
+	callbackURL := strings.TrimSuffix(browserURL, "/") + "/callback"
+	fakeAssertion := `{"id":"cred-grace","rawId":"Z3JhY2U","type":"public-key","response":{"clientDataJSON":"eyJ0eXBlIjoid2ViYXV0aG4uZ2V0In0","authenticatorData":"AAAA","signature":"AAAA","userHandle":null}}`
+	resp, err := http.Post(callbackURL, "application/json", strings.NewReader(fakeAssertion)) //nolint:noctx
+	if err != nil {
+		t.Fatalf("POST /callback: %v", err)
+	}
+	resp.Body.Close()
+
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("RunStepUp error: %v\nstderr: %s", err, stderrBuf.String())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatalf("RunStepUp timed out\nstderr: %s", stderrBuf.String())
 	}
 }
 
@@ -294,7 +403,7 @@ func TestRunStepUp_FullCeremony(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		out := stderrBuf.String()
-		if idx := strings.Index(out, "http://127.0.0.1:"); idx >= 0 {
+		if idx := strings.Index(out, "http://localhost:"); idx >= 0 {
 			// Extract the full URL up to the first whitespace.
 			rest := out[idx:]
 			end := strings.IndexAny(rest, " \t\n\r")
