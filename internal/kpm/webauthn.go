@@ -229,6 +229,10 @@ func statusTextForType(typ string) string {
 // We include authenticator_attachment as a forward-compatible field; existing
 // server versions will ignore it (unknown fields in JSON bodies are dropped).
 func webAuthnRegisterBegin(ctx context.Context, client *Client, callerID, attachment string) (json.RawMessage, error) {
+	if err := client.ensureAuth(ctx); err != nil {
+		return nil, fmt.Errorf("ensure auth: %w", err)
+	}
+
 	body := struct {
 		CallerID               string `json:"caller_id"`
 		AuthenticatorAttachment string `json:"authenticator_attachment,omitempty"`
@@ -248,9 +252,7 @@ func webAuthnRegisterBegin(ctx context.Context, client *Client, callerID, attach
 		return nil, fmt.Errorf("build begin request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if client.token != "" {
-		req.Header.Set("Authorization", "Bearer "+client.token)
-	}
+	req.Header.Set("Authorization", "Bearer "+client.token)
 
 	resp, err := client.httpClient.Do(req)
 	if err != nil {
@@ -272,6 +274,10 @@ func webAuthnRegisterBegin(ctx context.Context, client *Client, callerID, attach
 // webAuthnRegisterFinish POSTs /auth/webauthn/register/finish with the
 // completed credential.  Returns the credential ID string on success.
 func webAuthnRegisterFinish(ctx context.Context, client *Client, callerID, name string, credJSON json.RawMessage) (string, error) {
+	if err := client.ensureAuth(ctx); err != nil {
+		return "", fmt.Errorf("ensure auth: %w", err)
+	}
+
 	body := struct {
 		CallerID string          `json:"caller_id"`
 		Name     string          `json:"name"`
@@ -293,9 +299,7 @@ func webAuthnRegisterFinish(ctx context.Context, client *Client, callerID, name 
 		return "", fmt.Errorf("build finish request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if client.token != "" {
-		req.Header.Set("Authorization", "Bearer "+client.token)
-	}
+	req.Header.Set("Authorization", "Bearer "+client.token)
 
 	resp, err := client.httpClient.Do(req)
 	if err != nil {
@@ -502,15 +506,18 @@ type webAuthnCredential struct {
 func runWebAuthnList(ctx context.Context, stdout, stderr io.Writer, client *Client, args []string) int {
 	_ = args // no flags for list
 
+	if err := client.ensureAuth(ctx); err != nil {
+		fmt.Fprintf(stderr, "error: ensure auth: %v\n", err)
+		return 1
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		client.baseURL+"/auth/webauthn/credentials", nil)
 	if err != nil {
 		fmt.Fprintf(stderr, "error: build list request: %v\n", err)
 		return 1
 	}
-	if client.token != "" {
-		req.Header.Set("Authorization", "Bearer "+client.token)
-	}
+	req.Header.Set("Authorization", "Bearer "+client.token)
 
 	resp, err := client.httpClient.Do(req)
 	if err != nil {
@@ -589,15 +596,18 @@ func runWebAuthnRemove(ctx context.Context, stdout, stderr io.Writer, client *Cl
 		return 1
 	}
 
+	if err := client.ensureAuth(ctx); err != nil {
+		fmt.Fprintf(stderr, "error: ensure auth: %v\n", err)
+		return 1
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete,
 		client.baseURL+"/auth/webauthn/credentials/"+url.PathEscape(credID), nil)
 	if err != nil {
 		fmt.Fprintf(stderr, "error: build remove request: %v\n", err)
 		return 1
 	}
-	if client.token != "" {
-		req.Header.Set("Authorization", "Bearer "+client.token)
-	}
+	req.Header.Set("Authorization", "Bearer "+client.token)
 
 	resp, err := client.httpClient.Do(req)
 	if err != nil {

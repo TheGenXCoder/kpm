@@ -312,6 +312,80 @@ func TestWebAuthnRegister_NoSession(t *testing.T) {
 	}
 }
 
+// ── register: bearer token from persisted session is attached ───────────────
+
+func TestRunWebAuthnRegister_AttachesBearerFromSession(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("KPM_DATA", tmp)
+
+	// Create a fake session file with a known token.
+	sessionToken := makeFakeJWT(t, map[string]any{"sub": "eve"})
+	if err := SaveAuthSession(&AuthSession{
+		Token:     sessionToken,
+		TokenType: "Bearer",
+		SessionID: "sess-bearer-test",
+		ExpiresAt: timeNowPlus(900),
+		Claims:    AuthClaims{Sub: "eve"},
+	}); err != nil {
+		t.Fatalf("SaveAuthSession: %v", err)
+	}
+
+	// Mock server that captures the Authorization header on /auth/webauthn/register/begin.
+	var capturedAuthHeader string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/auth/webauthn/register/begin" && r.Method == http.MethodPost:
+			capturedAuthHeader = r.Header.Get("Authorization")
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"challenge":"dGVzdA","rp":{"name":"Test"},"user":{"id":"dXNlcg","name":"eve","displayName":"Eve"},"pubKeyCredParams":[{"type":"public-key","alg":-7}]}`)) //nolint:errcheck
+
+		case r.URL.Path == "/auth/webauthn/register/finish" && r.Method == http.MethodPost:
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"status":"registered","credential_id":"test-cred-eve"}`)) //nolint:errcheck
+
+		default:
+			http.Error(w, "unexpected "+r.URL.Path, http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	// Create a client WITHOUT a pre-loaded token — it must load from the persisted session.
+	c, _ := NewClientInsecure(srv.URL)
+
+	var stdoutBuf, stderrBuf bytes.Buffer
+	runDone := make(chan int, 1)
+	go func() {
+		runDone <- RunWebAuthn(context.Background(), &stdoutBuf, &stderrBuf, c, []string{"register", "--type", "passkey", "--name", "Test"})
+	}()
+
+	// Wait for local server URL in stderr.
+	localURL := waitForLocalURL(t, &stderrBuf, 5*time.Second)
+
+	// POST the fake credential to /callback.
+	fakeCred := `{"id":"test-cred-eve","rawId":"ZmFrZQ","type":"public-key","response":{"clientDataJSON":"eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIn0","attestationObject":"o2M"}}`
+	callbackURL := localURL + "/callback"
+	resp, err := http.Post(callbackURL, "application/json", strings.NewReader(fakeCred)) //nolint:noctx
+	if err != nil {
+		t.Fatalf("POST /callback: %v", err)
+	}
+	resp.Body.Close()
+
+	select {
+	case code := <-runDone:
+		if code != 0 {
+			t.Fatalf("RunWebAuthn exit %d\nstderr: %s\nstdout: %s", code, stderrBuf.String(), stdoutBuf.String())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("RunWebAuthn timed out")
+	}
+
+	// Assert that the Authorization header was set correctly.
+	expectedAuth := "Bearer " + sessionToken
+	if capturedAuthHeader != expectedAuth {
+		t.Errorf("Authorization header = %q, want %q", capturedAuthHeader, expectedAuth)
+	}
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 // runRegisterCeremony drives the register flow against a mock AgentKMS server
