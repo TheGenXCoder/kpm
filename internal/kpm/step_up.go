@@ -46,6 +46,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -89,9 +90,11 @@ async function run() {
     const enc = params.get('challenge');
     if (!enc) { status.textContent = 'Error: missing challenge param.'; return; }
 
-    // The challenge param is the raw server JSON (the full PublicKeyCredentialRequestOptions
-    // object) encoded as base64url.  Decode it back to an object.
-    const opts = JSON.parse(new TextDecoder().decode(b64url(enc)));
+    // The challenge param is the raw server JSON encoded as base64url.
+    // The go-webauthn server returns {"publicKey": {...options...}}, so unwrap
+    // if present; tolerate the older flat shape too.
+    let opts = JSON.parse(new TextDecoder().decode(b64url(enc)));
+    if (opts && opts.publicKey) opts = opts.publicKey;
 
     // Convert base64url challenge bytes to ArrayBuffer for the browser API.
     opts.challenge = b64url(opts.challenge).buffer;
@@ -324,15 +327,30 @@ func webAuthnFinish(ctx context.Context, client *Client, callerID string, assert
 // buildStepUpURL constructs the URL the browser should open.  The challenge
 // JSON is base64url-encoded into the ?challenge query parameter so the inline
 // JS can decode it without any server-side templating.
+//
+// The addr is rewritten from "127.0.0.1:<port>" to "localhost:<port>" so that
+// the browser's WebAuthn ceremony sees effective domain "localhost", which
+// matches the server's RPID.  The listener still binds to 127.0.0.1 for
+// security; only the URL handed to the browser is rewritten.
 func buildStepUpURL(addr string, challengeJSON json.RawMessage) string {
 	encoded := base64.RawURLEncoding.EncodeToString(challengeJSON)
 	u := &url.URL{
 		Scheme:   "http",
-		Host:     addr,
+		Host:     localhostURL(addr),
 		Path:     "/",
 		RawQuery: "challenge=" + url.QueryEscape(encoded),
 	}
 	return u.String()
+}
+
+// localhostURL replaces a "127.0.0.1:<port>" addr with "localhost:<port>" so
+// the browser-side WebAuthn ceremony's effective domain is "localhost"
+// (matching the server's RPID), not "127.0.0.1".
+func localhostURL(addr string) string {
+	if i := strings.LastIndex(addr, ":"); i >= 0 {
+		return "localhost" + addr[i:]
+	}
+	return addr
 }
 
 // buildStepUpHandler returns an http.Handler that serves the WebAuthn ceremony

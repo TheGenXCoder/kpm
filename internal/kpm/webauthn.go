@@ -342,11 +342,15 @@ func webAuthnRegisterFinish(ctx context.Context, client *Client, callerID, name 
 // buildWebAuthnRegisterURL constructs the browser URL for the registration
 // ceremony.  The full PublicKeyCredentialCreationOptions JSON is base64url-
 // encoded into the ?challenge query param (same encoding as RunStepUp).
+//
+// The addr is rewritten from "127.0.0.1:<port>" to "localhost:<port>" via
+// localhostURL so that the browser's WebAuthn ceremony sees effective domain
+// "localhost" (matching the server's RPID).
 func buildWebAuthnRegisterURL(addr string, challengeJSON json.RawMessage) string {
 	encoded := base64.RawURLEncoding.EncodeToString(challengeJSON)
 	u := &url.URL{
 		Scheme:   "http",
-		Host:     addr,
+		Host:     localhostURL(addr),
 		Path:     "/",
 		RawQuery: "challenge=" + url.QueryEscape(encoded),
 	}
@@ -442,7 +446,10 @@ async function run() {
     if (!enc) { status.textContent = 'Error: missing challenge param.'; return; }
 
     // Decode the full PublicKeyCredentialCreationOptions JSON.
-    const opts = JSON.parse(new TextDecoder().decode(b64url(enc)));
+    // The go-webauthn server returns {"publicKey": {...options...}}, so unwrap
+    // if present; tolerate the older flat shape too.
+    let opts = JSON.parse(new TextDecoder().decode(b64url(enc)));
+    if (opts && opts.publicKey) opts = opts.publicKey;
 
     // Convert base64url-encoded binary fields to ArrayBuffer for the browser API.
     opts.challenge = b64url(opts.challenge).buffer;
