@@ -221,11 +221,12 @@ func RunStepUp(ctx context.Context, stderr io.Writer, client *Client) error {
 	claims := DecodeJWTClaims(sr.Token)
 	expiresAt := time.Now().Add(time.Duration(sr.ExpiresIn) * time.Second)
 	if err := SaveAuthSession(&AuthSession{
-		Token:     sr.Token,
-		TokenType: sr.TokenType,
-		SessionID: sr.SessionID,
-		ExpiresAt: expiresAt,
-		Claims:    claims,
+		Token:      sr.Token,
+		TokenType:  sr.TokenType,
+		SessionID:  sr.SessionID,
+		ExpiresAt:  expiresAt,
+		Claims:     claims,
+		LastStepUp: time.Now(),
 	}); err != nil {
 		return fmt.Errorf("step-up: persist session: %w", err)
 	}
