@@ -21,7 +21,7 @@ set -e
 
 REPO="https://github.com/TheGenXCoder/kpm.git"
 BRANCH="main"
-RELEASE_TAG="${KPM_RELEASE_TAG:-v0.3.1}"
+RELEASE_TAG="${KPM_RELEASE_TAG:-v0.5.0}"
 INSTALL_DIR="${KPM_INSTALL_DIR:-/usr/local/bin}"
 BUILD_DIR="$(mktemp -d)"
 SOURCE_ONLY=0
