@@ -96,29 +96,126 @@ When the process exits, the plaintext is gone. Your shell never saw it.
 
 ---
 
+## Authentication & Enrollment
+
+Pure local development can use `kpm quickstart`. For real stores (shared, remote, or production), you need a proper authenticated identity.
+
+### Logging in
+
+```bash
+kpm login                    # Establishes a persisted mTLS session
+kpm login --step-up          # Upgrades to WebAuthn (YubiKey / passkey) for phishing-resistant human identity
+kpm whoami
+kpm logout
+```
+
+WebAuthn step-up lets you combine a device certificate with a hardware-backed human factor.
+
+### Enrolling a new device (or inviting someone)
+
+The secure path uses short-lived **bootstrap tokens** and client-side key generation:
+
+1. On a machine you control (already logged in):
+
+   ```bash
+   kpm device add my-arch-laptop
+   ```
+
+   This requests a one-time bootstrap token from the server.
+
+2. On the new machine:
+
+   ```bash
+   kpm enroll <bootstrap-token>
+   ```
+
+   `kpm enroll` generates an ECDSA keypair locally, creates a CSR (with SPIFFE identity), and only the public material ever leaves the machine.
+
+For inviting another user (e.g. Rajesh) to your hosted AgentKMS instance while maintaining strict user separation:
+
+```bash
+kpm admin inviteuser rajesh
+```
+
+This prints a ready-to-use one-time token and the exact command the recipient should run. The resulting certificate embeds both the stable user identity and the specific device — enabling policy isolation, device-specific revocation, and forensics.
+
+You can inspect enrolled devices with:
+
+```bash
+kpm device list
+kpm admin getuserinfo rajesh
+kpm device revoke some-device
+```
+
+### WebAuthn credential management
+
+```bash
+kpm webauthn register
+kpm webauthn list
+kpm webauthn remove <id>
+```
+
+### Legacy / dev convenience
+
+For quick local iteration against an `agentkms-dev` instance you control, the older shared-secret or `--invite` paths still work:
+
+```bash
+kpm enroll https://127.0.0.1:8443 --invite <dev-token>
+```
+
+These are **not recommended** for anything that crosses trust boundaries.
+
+---
+
 ## Secrets Registry
 
 KPM organizes secrets by `service/name`. Every write is audited and policy-checked through AgentKMS.
 
-### Commands
+### Core Commands
 
 ```bash
 kpm add <service/name>           # Store a secret (interactive, pipe, or --from-file)
   --tags <a,b,c>                 # Comma-separated tags (e.g. ci, dev, prod)
-  --type <kind>                  # Secret kind: api-token | ssh-key | connection-string
-                                 # | jwt | password | generic. Auto-detected from
-                                 # the value when omitted (e.g. sk- → api-token).
-  --description "..."            # Free-form description (shown by kpm describe)
-  --from-file <path>             # Read value from file instead of prompt/pipe
-  --expires <ISO-8601>           # Set expiry timestamp (informational, not enforced)
-kpm list                         # List all secrets (metadata only — never values)
-kpm list --tag ci                # Filter by tag
-kpm list --json                  # JSON output for scripting
-kpm describe <service/name>      # Show metadata (type, tags, description, version)
-kpm history <service/name>       # Version timeline (never values)
-kpm get <service/name>           # Retrieve the actual value
-kpm remove <service/name>        # Soft-delete (--purge for hard delete)
+  --type <kind>                  # Secret kind (auto-detected when omitted)
+  --description "..."            # Free-form description
+  --from-file <path>             # Read value from file
+kpm list [service]               # List secrets (metadata only)
+kpm describe <service/name>      # Show metadata + version history
+kpm history <service/name>       # Full version timeline
+kpm get <ref>                    # Retrieve a secret value
+kpm remove <service/name>        # Soft delete (--purge for permanent)
+kpm import --from <cfg> --to <cfg> [--purge]
+kpm share --path <path> --user <uid>
 ```
+
+### Authentication & Identity
+
+```bash
+kpm login                        # Authenticate and persist mTLS session
+kpm login --step-up              # WebAuthn ceremony (YubiKey / passkey)
+kpm logout
+kpm whoami
+kpm webauthn register
+kpm webauthn list
+kpm webauthn remove <id>
+```
+
+### Enrollment & Devices (Production Path)
+
+```bash
+kpm device add my-laptop         # Request a bootstrap token (after login)
+kpm enroll <bootstrap-token>     # New machine: client generates keys + CSR
+kpm device list [--json]         # See all your enrolled devices
+kpm device revoke <name>         # Revoke a specific device cert
+
+# Inviting others (from an enrolled machine)
+kpm admin inviteuser rajesh
+# → prints a one-time token + ready-to-run enroll command
+
+kpm admin getuserinfo rajesh     # Inspect another user's devices
+```
+
+The secure enrollment flow never transmits private keys and ties every certificate to a stable user identity plus a specific device. See the new "Authentication & Enrollment" section below for the full story (including the convenient `--invite` path for local dev).
 
 ### What you see vs what's hidden
 
