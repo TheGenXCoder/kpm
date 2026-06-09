@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/TheGenXCoder/kpm/pkg/tlsutil"
@@ -191,6 +192,49 @@ func (c *Client) doDelete(ctx context.Context, url string) (*http.Response, erro
 		return nil, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	return c.httpClient.Do(req)
+}
+
+// Post is a convenience for admin / custom endpoints. It ensures a bearer session
+// token (via mTLS) and does a POST with JSON body. Path should be absolute or
+// relative to the client's baseURL (e.g. "/admin/invites").
+func (c *Client) Post(ctx context.Context, path string, body any) (*http.Response, error) {
+	if err := c.ensureAuth(ctx); err != nil {
+		return nil, err
+	}
+	u := path
+	if !strings.HasPrefix(path, "http") {
+		u = strings.TrimSuffix(c.baseURL, "/") + "/" + strings.TrimLeft(path, "/")
+	}
+	var buf bytes.Buffer
+	if body != nil {
+		if err := json.NewEncoder(&buf).Encode(body); err != nil {
+			return nil, fmt.Errorf("encode body: %w", err)
+		}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, &buf)
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/json")
+	return c.httpClient.Do(req)
+}
+
+// Get is a convenience for admin / read endpoints. Ensures bearer + does GET.
+func (c *Client) Get(ctx context.Context, path string) (*http.Response, error) {
+	if err := c.ensureAuth(ctx); err != nil {
+		return nil, err
+	}
+	u := path
+	if !strings.HasPrefix(path, "http") {
+		u = strings.TrimSuffix(c.baseURL, "/") + "/" + strings.TrimLeft(path, "/")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}

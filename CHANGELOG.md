@@ -4,6 +4,21 @@ All notable changes to KPM are documented here. Format follows [Keep a Changelog
 
 ## [Unreleased]
 
+## [0.3.2] — 2026-05-xx
+
+### Added
+- `kpm admin inviteuser <username>` — run from any already-enrolled machine with access to the target AgentKMS. Creates a one-time, username-bound invite token and prints a ready-to-paste enroll command. Use this to onboard new users (e.g. Rajesh to your `agentkms.catalyst9.ai`) or additional machines for yourself while keeping a stable user identity across devices.
+- `kpm admin getuserinfo <username>` — shows devices that have enrolled for that user (device ID, hostname, enrollment time). Useful for audit and "what machines do I have registered?".
+- `kpm enroll [server] --invite <token>` — the clean path for new machines and invited users. The token carries the intended username; the new machine does not need to know or re-enter the username. Server validates the (one-time) invite, issues a fresh per-device mTLS client certificate with the correct `user:xxx` claim embedded (for policy isolation / userspace separation), and returns the cert bundle. Falls back to legacy prompts when no `--invite` is supplied.
+- Enroll now prefers the server from an existing `~/.kpm/config.yaml` when no server argument is given, making `kpm enroll --invite ...` sufficient on a fresh box that already has a config pointing at the desired primary.
+
+### Changed
+- The legacy shared-secret enrollment token mechanism (`AGENTKMS_ENROLL_TOKEN` / `enroll.secret` + explicit `--user --token`) remains available for pure local dev, but the new per-user invite flow is the recommended path for anything involving multiple people or multiple devices per person.
+- Client library now exports `Post(ctx, path, body)` and `Get(ctx, path)` helpers (authenticated via mTLS + short-lived bearer) so admin and future custom endpoints are easy to call.
+
+### Fixed
+- Dev server `/enroll` handler now correctly accepts `invite_token` (and legacy `enrollment_token`) from the JSON body (as sent by kpm), performs early directory resolution, uses the validated username when building the client certificate subject/OU, records devices for `getuserinfo`, and returns 403 (instead of silently prefixing "uninvited-") when a server-side secret is configured but the token doesn't match.
+
 ## [0.3.1] — 2026-04-23
 
 ### Fixed
