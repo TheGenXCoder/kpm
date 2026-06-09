@@ -142,3 +142,16 @@ First public release.
 
 [Unreleased]: https://github.com/TheGenXCoder/kpm/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/TheGenXCoder/kpm/releases/tag/v0.1.0
+
+## [0.5.0] — 2026-06-09
+
+### Added
+- Unified history across development machines (Mac + Arch/tp-dev) incorporating full WebAuthn/YubiKey, device management, bootstrap token enrollment, step-up auth, and user/device identity split in certs (from the v0.4.0 foundation) + the convenient `kpm admin inviteuser` / `kpm admin getuserinfo` + `kpm enroll --invite` UX for easy onboarding of new users (e.g. Rajesh) and machines while preserving per-user separation via certs and the local sync/fallback/mirror system.
+
+### Changed
+- `kpm enroll` now primarily uses the secure bootstrap/CSR flow (client-side key generation) when a real bootstrap token is provided. The `--invite` convenience path (for dev or quick invites) remains available and integrates with the admin commands.
+- Admin commands and local sync logic now sit on the production-grade auth/device foundation.
+
+### Fixed
+- Git histories reconciled for single source of truth on GitHub. Clean working trees on both Mac and Arch.
+
