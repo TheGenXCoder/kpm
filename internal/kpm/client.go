@@ -378,6 +378,43 @@ func (c *Client) ensureAuth(ctx context.Context) error {
 	return c.fallbackAuth(ctx)
 }
 
+// LastStepUp returns the time of the most recent successful WebAuthn
+// step-up ("cert+human") recorded in the persisted session.  Zero value
+// if the session has never been stepped up or no session exists.
+func (c *Client) LastStepUp() time.Time {
+	s, _ := LoadAuthSession()
+	if s == nil {
+		return time.Time{}
+	}
+	return s.LastStepUp
+}
+
+// NeedsStepUp reports whether a privileged interactive operation
+// (e.g. `kpm admin *`) must force a fresh WebAuthn step-up because
+// the last one is older than ttl or never happened.  ttl <= 0 means
+// "always require".
+func (c *Client) NeedsStepUp(ttl time.Duration) bool {
+	if ttl <= 0 {
+		return true
+	}
+	ls := c.LastStepUp()
+	if ls.IsZero() {
+		return true
+	}
+	return time.Since(ls) > ttl
+}
+
+// EnsureFreshStepUp forces a WebAuthn step-up (via the normal browser
+// ceremony) if NeedsStepUp(ttl) is true.  Call this at the beginning
+// of interactive admin commands.  Non-interactive / boot-time callers
+// must not call this — they rely on the device certificate alone.
+func (c *Client) EnsureFreshStepUp(ctx context.Context, ttl time.Duration, stderr io.Writer) error {
+	if !c.NeedsStepUp(ttl) {
+		return nil
+	}
+	return RunStepUp(ctx, stderr, c)
+}
+
 // fallbackAuth performs a one-shot /auth/session call without persisting
 // the resulting session.
 func (c *Client) fallbackAuth(ctx context.Context) error {

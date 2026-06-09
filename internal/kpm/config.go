@@ -39,6 +39,14 @@ type Config struct {
 	// Fallback is populated at runtime when FallbackPath is set (or via auto logic).
 	// It is not read from YAML directly.
 	Fallback *Config `yaml:"-"`
+
+	// StepUpTTL is the maximum age (in seconds) of a WebAuthn step-up
+	// ("cert+human") for interactive privileged operations such as
+	// `kpm admin *`.  Like sudo, after a successful step-up the user
+	// is not prompted again until this window expires.  Default 300s (5m).
+	// Non-interactive / boot-time use (service pulls, CI, etc.) relies
+	// only on the device certificate and does not require step-up.
+	StepUpTTL int `yaml:"step_up_ttl"`
 }
 
 // DefaultConfigPath returns the default config file path.
@@ -82,6 +90,9 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if cfg.SessionKeyTTL <= 0 {
 		cfg.SessionKeyTTL = 3600
+	}
+	if cfg.StepUpTTL <= 0 {
+		cfg.StepUpTTL = 300 // 5 minutes, sudo-like
 	}
 
 	// Expand ~ in paths.

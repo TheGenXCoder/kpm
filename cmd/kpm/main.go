@@ -2213,6 +2213,18 @@ func runAdminInviteUser(args []string) int {
 		return 1
 	}
 
+	// Privileged admin operation: force fresh step-up for interactive use
+	// (sudo-like short TTL). Non-interactive/boot paths rely on the device
+	// cert only and must not reach here.
+	if isTerminal(os.Stdin) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		if err := client.EnsureFreshStepUp(ctx, time.Duration(cfg.StepUpTTL)*time.Second, os.Stderr); err != nil {
+			fmt.Fprintf(os.Stderr, "admin inviteuser: step-up required (or failed): %v\n", err)
+			return 1
+		}
+	}
+
 	// Very small --ttl parser (168h, 7d, or seconds).
 	ttlSeconds := 0
 	for i := 1; i < len(args); i++ {
@@ -2297,6 +2309,16 @@ func runAdminGetUserInfo(args []string) int {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "client: %v\n", err)
 		return 1
+	}
+
+	// Privileged admin operation — require fresh step-up for interactive use.
+	if isTerminal(os.Stdin) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		if err := client.EnsureFreshStepUp(ctx, time.Duration(cfg.StepUpTTL)*time.Second, os.Stderr); err != nil {
+			fmt.Fprintf(os.Stderr, "admin getuserinfo: step-up required (or failed): %v\n", err)
+			return 1
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

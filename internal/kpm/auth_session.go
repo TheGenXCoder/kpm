@@ -51,6 +51,12 @@ type AuthSession struct {
 
 	// Claims is the decoded identity material from the JWT body.
 	Claims AuthClaims `json:"claims"`
+
+	// LastStepUp is the wall time of the most recent successful
+	// WebAuthn step-up ("cert+human") for this session.  Used by the
+	// client to enforce short-TTL re-auth for privileged operations
+	// (admin commands, etc.) in the same way sudo remembers a password.
+	LastStepUp time.Time `json:"last_step_up,omitempty"`
 }
 
 // AuthClaims captures the identity-shaped JWT claims we need for `kpm whoami`
