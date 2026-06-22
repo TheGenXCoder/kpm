@@ -32,6 +32,18 @@ func FormatShell(w io.Writer, entries []ResolvedEntry) error {
 	return nil
 }
 
+// FormatPowerShell writes entries as PowerShell environment assignments.
+// Single-quoted PowerShell strings escape embedded single quotes by doubling them.
+func FormatPowerShell(w io.Writer, entries []ResolvedEntry) error {
+	for _, e := range entries {
+		escaped := strings.ReplaceAll(string(e.PlainValue), "'", "''")
+		if _, err := fmt.Fprintf(w, "$env:%s='%s'\n", e.EnvKey, escaped); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // FormatJSON writes entries as a JSON object {"KEY": "value", ...}.
 func FormatJSON(w io.Writer, entries []ResolvedEntry) error {
 	m := make(map[string]string, len(entries))

@@ -166,7 +166,7 @@ func main() {
 	devMode := fs.Bool("dev", effectiveDev, "force local development store only (do not touch hosted environments such as odev)")
 
 	templateFlag := fs.String("from", "", "template file path")
-	outputFlag := fs.String("output", "dotenv", "output format: dotenv, shell, json")
+	outputFlag := fs.String("output", "dotenv", "output format: dotenv, shell, powershell, json")
 
 	plaintextFlag := fs.Bool("plaintext", false, "output plaintext values (less secure)")
 	// //blog:part-2 references --strict flag behavior in the "that's too convenient" section.
@@ -1188,6 +1188,12 @@ func runEnv(ctx context.Context, cfg *kpm.Config, tmplPath, format string, plain
 		if !plaintext && err2 == nil {
 			fmt.Fprintf(os.Stdout, "export KPM_SESSION='%s'\n", sessionID)
 			fmt.Fprintf(os.Stdout, "export KPM_DECRYPT_SOCK='%s'\n", sockPath)
+		}
+	case "powershell", "pwsh", "ps1":
+		err2 = kpm.FormatPowerShell(os.Stdout, resolved)
+		if !plaintext && err2 == nil {
+			fmt.Fprintf(os.Stdout, "$env:KPM_SESSION='%s'\n", sessionID)
+			fmt.Fprintf(os.Stdout, "$env:KPM_DECRYPT_SOCK='%s'\n", strings.ReplaceAll(sockPath, "'", "''"))
 		}
 	case "json":
 		err2 = kpm.FormatJSON(os.Stdout, resolved)

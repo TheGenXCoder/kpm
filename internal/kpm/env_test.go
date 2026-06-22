@@ -44,6 +44,22 @@ func TestFormatShell(t *testing.T) {
 	}
 }
 
+func TestFormatPowerShell(t *testing.T) {
+	entries := []ResolvedEntry{
+		{EnvKey: "DB_PASSWORD", PlainValue: []byte("s3'cret")},
+	}
+
+	var buf bytes.Buffer
+	if err := FormatPowerShell(&buf, entries); err != nil {
+		t.Fatal(err)
+	}
+
+	out := buf.String()
+	if !bytes.Contains([]byte(out), []byte("$env:DB_PASSWORD='s3''cret'")) {
+		t.Errorf("unexpected PowerShell output: %s", out)
+	}
+}
+
 func TestFormatJSON(t *testing.T) {
 	entries := []ResolvedEntry{
 		{EnvKey: "APP", PlainValue: []byte("test")},
