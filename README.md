@@ -8,8 +8,11 @@
 KPM is a secrets lifecycle tool. Add secrets from the command line. Organize them by service. Inject them into your environment as ciphertext that only decrypts at the moment your app needs it. Back it with [AgentKMS](https://github.com/TheGenXCoder/agentkms) in production, or run the built-in dev server locally.
 
 ```bash
-# Install
+# Install on macOS/Linux
 curl -sL kpm.catalyst9.ai/install | bash
+
+# Install on Windows PowerShell
+# iwr https://raw.githubusercontent.com/TheGenXCoder/kpm/main/scripts/install.ps1 -UseBasicParsing | iex
 
 # Set up a local dev environment (no server needed)
 kpm quickstart
@@ -47,8 +50,11 @@ KPM fixes this in two commands. Your secrets go into one place, encrypted, audit
 ## Quick Start
 
 ```bash
-# Install (uses prebuilt binary; falls back to source build if Go is installed)
+# Install on macOS/Linux (uses prebuilt binary; falls back to source build if Go is installed)
 curl -sL kpm.catalyst9.ai/install | bash
+
+# Install on Windows PowerShell
+# iwr https://raw.githubusercontent.com/TheGenXCoder/kpm/main/scripts/install.ps1 -UseBasicParsing | iex
 
 # Quickstart: generates PKI, starts local AgentKMS, seeds demo secrets,
 # writes config + starter templates.

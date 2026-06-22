@@ -6,7 +6,7 @@
 # Jobs:
 #   quality    — go vet, go test -race, coverage threshold
 #   build      — cross-compile for linux/amd64, linux/arm64, darwin/amd64,
-#                darwin/arm64 (validates release-time build matrix)
+#                darwin/arm64, windows/amd64 (validates release-time build matrix)
 #
 # No secrets required; all checks operate on repo content only.
 # =============================================================================
@@ -82,6 +82,8 @@ jobs:
             arch: amd64
           - os: darwin
             arch: arm64
+          - os: windows
+            arch: amd64
 
     steps:
       - name: Checkout
