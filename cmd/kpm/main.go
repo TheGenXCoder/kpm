@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -1058,10 +1057,10 @@ func runEnv(ctx context.Context, cfg *kpm.Config, tmplPath, format string, plain
 			fmt.Fprintf(os.Stderr, "error generating session ID: %v\n", randErr)
 			os.Exit(1)
 		}
-		sessionID = fmt.Sprintf("strict-%x", randKey[:4])
+		sessionID = fmt.Sprintf("strict-%x", randKey[:16])
 		kpm.ZeroBytes(randKey)
 
-		sockPath = filepath.Join(os.TempDir(), fmt.Sprintf("kpm-%s.sock", sessionID))
+		sockPath = decryptEndpoint(sessionID)
 
 		for i := range resolved {
 			if !resolved[i].IsKMSRef {
@@ -1103,13 +1102,8 @@ func runEnv(ctx context.Context, cfg *kpm.Config, tmplPath, format string, plain
 		}
 		listenerCmd.Process.Release()
 
-		// Wait briefly for the socket to appear.
-		for i := 0; i < 100; i++ {
-			if _, statErr := os.Stat(sockPath); statErr == nil {
-				break
-			}
-			time.Sleep(5 * time.Millisecond)
-		}
+		// Wait briefly for the decrypt listener to accept connections.
+		waitForDecryptListener(sockPath, 100, 5*time.Millisecond)
 
 		fmt.Fprintf(os.Stderr, "✓ Resolved %d secrets from AgentKMS\n", kmsCount)
 		fmt.Fprintf(os.Stderr, "✓ Strict mode: per-decrypt mTLS round-trip (session: %s, TTL: %ds)\n", sessionID, ttl)
@@ -1124,8 +1118,8 @@ func runEnv(ctx context.Context, cfg *kpm.Config, tmplPath, format string, plain
 		}
 		defer kpm.ZeroBytes(sk)
 
-		sessionID = fmt.Sprintf("s%x", sk[:4])
-		sockPath = filepath.Join(os.TempDir(), fmt.Sprintf("kpm-%s.sock", sessionID))
+		sessionID = fmt.Sprintf("s%x", sk[:16])
+		sockPath = decryptEndpoint(sessionID)
 		ttl := cfg.SessionKeyTTL
 		if ttl <= 0 {
 			ttl = 300
@@ -1165,13 +1159,8 @@ func runEnv(ctx context.Context, cfg *kpm.Config, tmplPath, format string, plain
 		stdinPipe.Close()
 		listenerCmd.Process.Release()
 
-		// Wait briefly for the socket to appear before output is consumed.
-		for i := 0; i < 100; i++ {
-			if _, statErr := os.Stat(sockPath); statErr == nil {
-				break
-			}
-			time.Sleep(5 * time.Millisecond)
-		}
+		// Wait briefly for the decrypt listener to accept connections before output is consumed.
+		waitForDecryptListener(sockPath, 100, 5*time.Millisecond)
 
 		fmt.Fprintf(os.Stderr, "✓ Resolved %d secrets from AgentKMS\n", kmsCount)
 		fmt.Fprintf(os.Stderr, "✓ Encrypted values (AES-256-GCM, session: %s, TTL: %ds)\n", sessionID, ttl)
@@ -1322,7 +1311,7 @@ func runRun(ctx context.Context, cfg *kpm.Config, tmplPath string, cmdArgs []str
 			fmt.Fprintf(os.Stderr, "error: %v\n", randErr)
 			os.Exit(1)
 		}
-		sessionID := fmt.Sprintf("strict-%x", randKey[:4])
+		sessionID := fmt.Sprintf("strict-%x", randKey[:16])
 		kpm.ZeroBytes(randKey)
 
 		ttl := time.Duration(cfg.SessionKeyTTL) * time.Second
@@ -1340,7 +1329,7 @@ func runRun(ctx context.Context, cfg *kpm.Config, tmplPath string, cmdArgs []str
 			resolved[i].PlainValue = []byte(blob)
 		}
 
-		sockPath := filepath.Join(os.TempDir(), fmt.Sprintf("kpm-%s.sock", sessionID))
+		sockPath := decryptEndpoint(sessionID)
 		dl := &kpm.DecryptListener{
 			SocketPath:     sockPath,
 			SessionID:      sessionID,
@@ -1356,12 +1345,7 @@ func runRun(ctx context.Context, cfg *kpm.Config, tmplPath string, cmdArgs []str
 			}
 		}()
 
-		for i := 0; i < 50; i++ {
-			if _, statErr := os.Stat(sockPath); statErr == nil {
-				break
-			}
-			time.Sleep(5 * time.Millisecond)
-		}
+		waitForDecryptListener(sockPath, 50, 5*time.Millisecond)
 
 		resolved = append(resolved, kpm.ResolvedEntry{
 			EnvKey:     "KPM_DECRYPT_SOCK",
@@ -1381,7 +1365,7 @@ func runRun(ctx context.Context, cfg *kpm.Config, tmplPath string, cmdArgs []str
 		}
 		defer kpm.ZeroBytes(sk)
 
-		sessionID := fmt.Sprintf("s%x", sk[:4])
+		sessionID := fmt.Sprintf("s%x", sk[:16])
 		ttl := time.Duration(cfg.SessionKeyTTL) * time.Second
 
 		for i := range resolved {
@@ -1397,7 +1381,7 @@ func runRun(ctx context.Context, cfg *kpm.Config, tmplPath string, cmdArgs []str
 			resolved[i].PlainValue = []byte(kpm.FormatCiphertextBlob(sessionID, ct))
 		}
 
-		sockPath := filepath.Join(os.TempDir(), fmt.Sprintf("kpm-%s.sock", sessionID))
+		sockPath := decryptEndpoint(sessionID)
 		dl := &kpm.DecryptListener{
 			SocketPath: sockPath,
 			SessionKey: sk,
@@ -1412,12 +1396,7 @@ func runRun(ctx context.Context, cfg *kpm.Config, tmplPath string, cmdArgs []str
 			}
 		}()
 
-		for i := 0; i < 50; i++ {
-			if _, statErr := os.Stat(sockPath); statErr == nil {
-				break
-			}
-			time.Sleep(5 * time.Millisecond)
-		}
+		waitForDecryptListener(sockPath, 50, 5*time.Millisecond)
 
 		resolved = append(resolved, kpm.ResolvedEntry{
 			EnvKey:     "KPM_DECRYPT_SOCK",
@@ -1663,7 +1642,7 @@ func runDecrypt(blob string) {
 		os.Exit(1)
 	}
 
-	conn, err := net.Dial("unix", sockPath)
+	conn, err := dialDecryptEndpoint(sockPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error connecting to decrypt socket: %v\n", err)
 		os.Exit(1)

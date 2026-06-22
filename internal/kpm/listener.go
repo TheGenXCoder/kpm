@@ -22,7 +22,10 @@ type DecryptResponse struct {
 	Error     string `json:"error,omitempty"`
 }
 
-// DecryptListener serves JIT decrypt requests over a Unix domain socket.
+// DecryptListener serves JIT decrypt requests over a local transport.
+// Unix uses a permission-locked Unix domain socket. Windows uses a loopback
+// TCP endpoint selected by the caller because Go's standard library does not
+// expose Windows named pipes as net.Listener.
 type DecryptListener struct {
 	SocketPath string
 	SessionKey []byte
@@ -56,16 +59,21 @@ func (dl *DecryptListener) Serve() error {
 	}
 	dl.mu.Unlock()
 
-	os.Remove(dl.SocketPath)
+	network, address := listenerNetworkAddress(dl.SocketPath)
+	if network == "unix" {
+		os.Remove(address)
+	}
 
-	ln, err := net.Listen("unix", dl.SocketPath)
+	ln, err := net.Listen(network, address)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", dl.SocketPath, err)
 	}
 
-	if err := os.Chmod(dl.SocketPath, 0600); err != nil {
-		ln.Close()
-		return fmt.Errorf("chmod socket: %w", err)
+	if network == "unix" {
+		if err := os.Chmod(address, 0600); err != nil {
+			ln.Close()
+			return fmt.Errorf("chmod socket: %w", err)
+		}
 	}
 
 	dl.mu.Lock()
@@ -74,7 +82,9 @@ func (dl *DecryptListener) Serve() error {
 	if dl.closed {
 		dl.mu.Unlock()
 		ln.Close()
-		os.Remove(dl.SocketPath)
+		if network == "unix" {
+			os.Remove(address)
+		}
 		return nil
 	}
 	dl.listener = ln
@@ -184,5 +194,18 @@ func (dl *DecryptListener) Close() {
 		dl.listener.Close()
 	}
 	dl.mu.Unlock()
-	os.Remove(dl.SocketPath)
+	network, address := listenerNetworkAddress(dl.SocketPath)
+	if network == "unix" {
+		os.Remove(address)
+	}
+}
+
+// listenerNetworkAddress maps KPM_DECRYPT_SOCK values to a local net transport.
+// Values with tcp:// are loopback TCP endpoints for Windows fallback support;
+// all other values are Unix socket paths.
+func listenerNetworkAddress(endpoint string) (network string, address string) {
+	if strings.HasPrefix(endpoint, "tcp://") {
+		return "tcp", strings.TrimPrefix(endpoint, "tcp://")
+	}
+	return "unix", endpoint
 }
