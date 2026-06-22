@@ -9,10 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"syscall"
 )
-
-type syscallStatT = syscall.Stat_t
 
 type FileOptions struct {
 	Paths         []string
@@ -43,14 +40,14 @@ var defaultSkipDirs = map[string]bool{
 	".tox":         true,
 
 	// Build outputs
-	"target":  true, // Rust, Java/Maven
-	"dist":    true,
-	"build":   true,
-	"out":     true,
-	".next":   true,
-	".nuxt":   true,
-	".turbo":  true,
-	".cache":  true,
+	"target": true, // Rust, Java/Maven
+	"dist":   true,
+	"build":  true,
+	"out":    true,
+	".next":  true,
+	".nuxt":  true,
+	".turbo": true,
+	".cache": true,
 
 	// Infrastructure state
 	".terraform": true,

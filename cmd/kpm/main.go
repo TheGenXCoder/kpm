@@ -17,7 +17,6 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/TheGenXCoder/kpm/internal/kpm"
@@ -847,7 +846,7 @@ func ensureLocalDevServer(cfg *kpm.Config) {
 	// Use a short context to check if already healthy
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
-	if err := testClient.Authenticate(ctx); err == nil {
+	if _, err := testClient.Authenticate(ctx); err == nil {
 		return // already running and healthy
 	}
 
@@ -871,7 +870,7 @@ func ensureLocalDevServer(cfg *kpm.Config) {
 	for i := 0; i < 30; i++ {
 		time.Sleep(500 * time.Millisecond)
 		testCtx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-		if err := testClient.Authenticate(testCtx); err == nil {
+		if _, err := testClient.Authenticate(testCtx); err == nil {
 			cancel()
 			fmt.Fprintln(os.Stderr, "Local dev server is up.")
 			return
@@ -915,7 +914,7 @@ func getClient(cfg *kpm.Config, isFallback bool) *kpm.Client {
 
 	// Authenticate to verify the backend is reachable and the mTLS identity is accepted.
 	// Network errors here trigger failover; auth/policy errors are real failures.
-	if err := client.Authenticate(context.Background()); err != nil {
+	if _, err := client.Authenticate(context.Background()); err != nil {
 		if !isFallback && cfg.Fallback != nil && isNetworkError(err) {
 			fmt.Fprintln(os.Stderr, "primary backend unreachable, falling back to alternate store...")
 			return getClient(cfg.Fallback, true)
@@ -1097,7 +1096,7 @@ func runEnv(ctx context.Context, cfg *kpm.Config, tmplPath, format string, plain
 			listenerArgs = append(listenerArgs, "--ca", cfg.CA)
 		}
 		listenerCmd := exec.Command(os.Args[0], listenerArgs...)
-		listenerCmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		setDetached(listenerCmd)
 		if startErr := listenerCmd.Start(); startErr != nil {
 			fmt.Fprintf(os.Stderr, "error starting strict listener: %v\n", startErr)
 			os.Exit(1)
@@ -1152,7 +1151,7 @@ func runEnv(ctx context.Context, cfg *kpm.Config, tmplPath, format string, plain
 			"--socket", sockPath,
 			"--ttl", fmt.Sprintf("%d", ttl),
 		)
-		listenerCmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		setDetached(listenerCmd)
 		stdinPipe, pipeErr := listenerCmd.StdinPipe()
 		if pipeErr != nil {
 			fmt.Fprintf(os.Stderr, "error creating pipe: %v\n", pipeErr)
@@ -1898,7 +1897,7 @@ func runUpdate(args []string) int {
 			os.Remove(tmpFile)
 			return 1
 		}
-	} 
+	}
 
 	// Verify
 	newVersionCmd := exec.Command(targetBinary, "version")
@@ -1970,8 +1969,8 @@ SEE ALSO
 func runEnroll(args []string) int {
 	server := ""
 	user := ""
-	token := ""      // legacy shared secret
-	invite := ""     // preferred: one-time token from `kpm admin inviteuser`
+	token := ""  // legacy shared secret
+	invite := "" // preferred: one-time token from `kpm admin inviteuser`
 	for i := 0; i < len(args); i++ {
 		switch {
 		case args[i] == "--user" && i+1 < len(args):
@@ -2343,7 +2342,9 @@ func runAdminGetUserInfo(args []string) int {
 
 // runImport copies secrets (metadata + values) from a source store to a destination store.
 // Example: move from local dev store to odev remote.
-//   kpm import --from ~/.kpm/config.yaml --to ~/.kpm/config-odev.yaml
+//
+//	kpm import --from ~/.kpm/config.yaml --to ~/.kpm/config-odev.yaml
+//
 // Supports --purge to delete from source after successful copy (move).
 // Uses the existing client APIs for list, fetch, write.
 func runImport(args []string) int {

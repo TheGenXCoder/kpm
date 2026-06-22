@@ -115,3 +115,9 @@ func ExpandHome(path string) string {
 	}
 	return filepath.Join(home, path[1:])
 }
+
+// expandHome preserves the original unexported helper name used by tests and
+// older package-internal call sites while keeping ExpandHome available to cmd/kpm.
+func expandHome(path string) string {
+	return ExpandHome(path)
+}
