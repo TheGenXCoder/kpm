@@ -6,12 +6,12 @@ Usage:
 
 Environment variables:
   KPM_INSTALL_DIR   Install directory. Default: $env:LOCALAPPDATA\Programs\kpm
-  KPM_RELEASE_TAG   Release tag. Default: v0.5.0
+  KPM_RELEASE_TAG   Release tag. Default: v0.6.0
 #>
 
 $ErrorActionPreference = 'Stop'
 
-$ReleaseTag = if ($env:KPM_RELEASE_TAG) { $env:KPM_RELEASE_TAG } else { 'v0.5.0' }
+$ReleaseTag = if ($env:KPM_RELEASE_TAG) { $env:KPM_RELEASE_TAG } else { 'v0.6.0' }
 $InstallDir = if ($env:KPM_INSTALL_DIR) { $env:KPM_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA 'Programs\kpm' }
 $BinaryUrl = "https://github.com/TheGenXCoder/kpm/releases/download/$ReleaseTag/kpm-windows-amd64.exe"
 $Dest = Join-Path $InstallDir 'kpm.exe'

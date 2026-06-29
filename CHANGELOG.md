@@ -4,7 +4,17 @@ All notable changes to KPM are documented here. Format follows [Keep a Changelog
 
 ## [Unreleased]
 
-## [0.3.2] — 2026-05-xx
+## [0.6.0] — 2026-06-28
+
+### Added
+- **Windows amd64 support** — cross-compile in CI, `scripts/install.ps1`, loopback TCP JIT decrypt transport (`tcp://127.0.0.1:<port>`)
+- `kpm env --output powershell` / `pwsh` / `ps1` for PowerShell env injection
+- Windows process detach helpers (`detach_windows.go`, build-tagged scan sources)
+
+### Changed
+- JIT decrypt on Windows uses loopback TCP instead of Unix domain sockets (localhost-only pilot posture)
+
+## [0.5.0] — 2026-06-09
 
 ### Added
 - `kpm admin inviteuser <username>` — run from any already-enrolled machine with access to the target AgentKMS. Creates a one-time, username-bound invite token and prints a ready-to-paste enroll command. Use this to onboard new users (e.g. Rajesh to your `agentkms.catalyst9.ai`) or additional machines for yourself while keeping a stable user identity across devices.

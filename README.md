@@ -575,6 +575,9 @@ curl -sL https://raw.githubusercontent.com/TheGenXCoder/kpm/main/tests/run-tests
 
 ## Roadmap
 
+Shipped in v0.6:
+- **Windows support** — amd64 builds, PowerShell install, loopback JIT decrypt, `env --output powershell`
+
 Shipped in v0.3:
 - Dynamic Secrets — AgentKMS mints scoped, short-lived credentials (see [Part 5](https://blog.catalyst9.ai/posts/part-5-dynamic-secrets/))
 - MCP server — AI tools connect to AgentKMS via the Model Context Protocol
@@ -586,7 +589,6 @@ Coming up:
 - **Import scanner** — `kpm import --scan ~/.config` finds secrets in your files, offers to secure them
 - **ABAC policy** — Time-based, network-based, and tag-based access rules
 - **Split knowledge** — PCI-DSS dual-control: N-of-M authorization for sensitive secrets
-- **Windows support**
 
 ---
 
