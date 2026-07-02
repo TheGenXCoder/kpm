@@ -104,7 +104,7 @@ func RunEnroll(
 			fmt.Fprintf(stderr, "error: cannot determine hostname: %v\n", err)
 			return 1
 		}
-		deviceName = h
+		deviceName = sanitizeDeviceName(h)
 	}
 
 	// Resolve trust domain and tenant from config.
@@ -258,6 +258,34 @@ func (c *Client) IssueCert(ctx context.Context, req CertIssueRequest) (*CertIssu
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
+
+// sanitizeDeviceName converts a hostname into a server-valid device name:
+// lowercase, [a-z0-9-] only (runs of other chars collapse to a single '-'),
+// max 64 chars. "Berts-MacBook-Pro.local" → "berts-macbook-pro-local".
+func sanitizeDeviceName(h string) string {
+	var b strings.Builder
+	lastDash := false
+	for _, r := range strings.ToLower(h) {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
+			b.WriteRune(r)
+			lastDash = false
+		default:
+			if !lastDash && b.Len() > 0 {
+				b.WriteByte('-')
+				lastDash = true
+			}
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if len(out) > 64 {
+		out = out[:64]
+	}
+	if out == "" {
+		out = "device"
+	}
+	return out
+}
 
 // buildSPIFFEURI constructs the SPIFFE SAN URI:
 //

@@ -80,7 +80,7 @@ Examples:
   kpm cred rotate blog-audit-pat
 `
 
-var version = "0.5.0"
+var version = "0.6.1"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -593,7 +593,18 @@ func main() {
 			fmt.Fprintln(os.Stderr, "kpm get: no reference specified")
 			os.Exit(1)
 		}
-		runGet(ctx, cfg, args[0], *verbose)
+		runGet(ctx, cfg, args[0], *verbose, *strictFlag)
+	case "sync":
+		cache, err := kpm.NewSecretCache()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		if err := cache.Clear(); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Fprintln(os.Stderr, "Local secret cache cleared. Next kpm get will pull from remote.")
 	case "decrypt":
 		args := fs.Args()
 		var blob string
@@ -745,6 +756,13 @@ func main() {
 // others build a client from config + global flags the same way other
 // commands do.
 func runAuthCmd(subcmd string, args []string) int {
+	// kpm login <invitecode> — one-step enroll + config + session.
+	// Handled before any client construction: a brand-new machine has no
+	// config or certs yet, which is exactly the state login solves.
+	if subcmd == "login" && len(args) == 1 && kpm.IsInviteCode(args[0]) {
+		return kpm.RunLoginWithInvite(context.Background(), os.Stdout, os.Stderr, args[0])
+	}
+
 	if subcmd == "whoami" {
 		err := kpm.RunWhoami(os.Stdout)
 		if err != nil {
@@ -1430,7 +1448,16 @@ func runRun(ctx context.Context, cfg *kpm.Config, tmplPath string, cmdArgs []str
 	os.Exit(exitCode)
 }
 
-func runGet(ctx context.Context, cfg *kpm.Config, ref string, verbose bool) {
+func runGet(ctx context.Context, cfg *kpm.Config, ref string, verbose, strict bool) {
+	if !strict && cfg.CacheTTLSec > 0 {
+		if cache, err := kpm.NewSecretCache(); err == nil {
+			if val, ok := cache.Get(ref, cfg.CacheTTLSec); ok {
+				os.Stdout.Write(val)
+				return
+			}
+		}
+	}
+
 	client := buildClient(cfg)
 
 	parsed, ok := kpm.ParseKMSRef("${kms:" + ref + "}")
@@ -1444,6 +1471,7 @@ func runGet(ctx context.Context, cfg *kpm.Config, ref string, verbose bool) {
 		}
 		defer kpm.ZeroMap(secrets)
 		if val, ok := secrets["value"]; ok {
+			putSecretCache(cfg, ref, val, strict)
 			os.Stdout.Write(val)
 		} else {
 			for k, v := range secrets {
@@ -1493,12 +1521,22 @@ func runGet(ctx context.Context, cfg *kpm.Config, ref string, verbose bool) {
 		}
 		defer kpm.ZeroMap(secrets)
 		if val, ok := secrets["value"]; ok {
+			putSecretCache(cfg, ref, val, strict)
 			os.Stdout.Write(val)
 		} else {
 			for k, v := range secrets {
 				fmt.Fprintf(os.Stdout, "%s=%s\n", k, v)
 			}
 		}
+	}
+}
+
+func putSecretCache(cfg *kpm.Config, ref string, val []byte, strict bool) {
+	if strict || cfg.CacheTTLSec <= 0 {
+		return
+	}
+	if cache, err := kpm.NewSecretCache(); err == nil {
+		_ = cache.Put(ref, val)
 	}
 }
 
@@ -2254,7 +2292,8 @@ func runAdminInviteUser(args []string) int {
 	}
 
 	var out struct {
-		InviteToken string `json:"invite_token"`
+		InviteCode  string `json:"invite_code"`
+		InviteToken string `json:"invite_token"` // legacy servers
 		Username    string `json:"username"`
 		ExpiresAt   string `json:"expires_at"`
 	}
@@ -2264,15 +2303,21 @@ func runAdminInviteUser(args []string) int {
 	}
 
 	fmt.Printf("\nInvite created for user %q on %s\n\n", out.Username, cfg.Server)
-	fmt.Printf("  Token:     %s\n", out.InviteToken)
 	if out.ExpiresAt != "" {
 		fmt.Printf("  Expires:   %s\n", out.ExpiresAt)
 	}
 	fmt.Println()
-	fmt.Printf("Recipient (or you on a new machine) runs:\n\n")
+	if out.InviteCode != "" {
+		fmt.Printf("Recipient (or you on a new machine) runs:\n\n")
+		fmt.Printf("    kpm login %s\n\n", out.InviteCode)
+		fmt.Println("That single command enrolls the device, pins the server CA, and writes the config.")
+		return 0
+	}
+	// Legacy server: fall back to the old two-argument enroll instructions.
+	fmt.Printf("  Token:     %s\n", out.InviteToken)
+	fmt.Printf("\nRecipient (or you on a new machine) runs:\n\n")
 	fmt.Printf("    kpm enroll %s --invite %s\n\n", cfg.Server, out.InviteToken)
 	fmt.Println("The server resolves the username from the invite token.")
-	fmt.Println("The issued certificate will contain the stable user identity so the person gets their own userspace.")
 	return 0
 }
 

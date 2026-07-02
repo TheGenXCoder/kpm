@@ -47,6 +47,9 @@ type Config struct {
 	// Non-interactive / boot-time use (service pulls, CI, etc.) relies
 	// only on the device certificate and does not require step-up.
 	StepUpTTL int `yaml:"step_up_ttl"`
+
+	// CacheTTLSec is how long locally cached secret values remain valid (default 900).
+	CacheTTLSec int `yaml:"cache_ttl_sec"`
 }
 
 // DefaultConfigPath returns the default config file path.
@@ -94,11 +97,16 @@ func LoadConfig(path string) (*Config, error) {
 	if cfg.StepUpTTL <= 0 {
 		cfg.StepUpTTL = 300 // 5 minutes, sudo-like
 	}
+	if cfg.CacheTTLSec <= 0 {
+		cfg.CacheTTLSec = 900 // 15 minutes
+	}
 
 	// Expand ~ in paths.
 	cfg.Cert = ExpandHome(cfg.Cert)
 	cfg.Key = ExpandHome(cfg.Key)
 	cfg.CA = ExpandHome(cfg.CA)
+
+	_ = cfg.ResolveIdentityPaths()
 
 	return cfg, nil
 }
