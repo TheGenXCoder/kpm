@@ -109,11 +109,14 @@ Pure local development can use `kpm quickstart`. For real stores (shared, remote
 ### Logging in
 
 ```bash
-kpm login                    # Establishes a persisted mTLS session
-kpm login --step-up          # Upgrades to WebAuthn (YubiKey / passkey) for phishing-resistant human identity
+kpm login <invite-code>         # One-step enroll + config + session (kpmi1_… codes from agentkms invite)
+kpm login                       # Session only (already enrolled)
+kpm login --step-up             # Upgrades to WebAuthn (YubiKey / passkey)
 kpm whoami
 kpm logout
 ```
+
+Invite codes embed the server URL and CA fingerprint — run `agentkms invite <user>` on the server, then paste the `kpm login …` command on the client.
 
 WebAuthn step-up lets you combine a device certificate with a hardware-backed human factor.
 
@@ -356,7 +359,77 @@ ${kms:service/name#field}        # Multi-field secret (specific field)
 ${kms:llm/anthropic}             # LLM provider credential
 ${kms:kv/db/prod#password}       # KV store with key selector
 ${kms:kv/app/config#port:-8080}  # With fallback default
+
+# Multi-backend (v0.6.2+) — personal store + team/UTA store in one template
+${kms@mstr:cloudflare/dns-token}
+${kms@uta:uta/sandbox/winrm-user}
 ```
+
+CLI equivalents: `kpm get @mstr/cloudflare/dns-token`, `kpm get cloudflare/dns-token` (uses `default_backend`).
+
+---
+
+## Multi-backend (v0.6.2+)
+
+Point KPM at more than one AgentKMS instance — e.g. personal secrets on `mstr`, UTA project secrets on `uta`, local dev on `local`.
+
+`~/.kpm/config.yaml`:
+
+```yaml
+default_backend: mstr
+
+backends:
+  mstr:
+    server: https://localhost:8443
+    cert: ~/.kpm/certs-odev/client.crt   # optional after kpm login
+    key: ~/.kpm/certs-odev/client.key
+    ca: ~/.kpm/certs-odev/ca.crt
+  local:
+    server: https://127.0.0.1:8443
+  # uta:
+  #   server: https://agentkms-uta.example.com:8443
+
+default_template: .env.template
+session_key_ttl: 3600
+cache_ttl_sec: 900
+trust_domain: catalyst9.local
+tenant: catalyst9
+```
+
+```bash
+kpm get cloudflare/dns-token           # default_backend (mstr)
+kpm get @mstr/cloudflare/dns-token     # explicit
+kpm get @uta/uta/sandbox/winrm-user    # when uta backend is configured
+```
+
+Identity and certs are stored per server URL under `~/.kpm/identity/<host>_<port>/`. Enroll each backend once (`kpm login <invite>`).
+
+> **Check `KPM_CONFIG`.** If set, it overrides `~/.kpm/config.yaml`. Use `echo $KPM_CONFIG` when debugging “missing cert” errors.
+
+### Remote access via Cloudflare Tunnel
+
+AgentKMS requires **client mTLS**. Cloudflare HTTP proxy cannot forward client certs; tunnel **TCP** ingress still needs a **client-side** `cloudflared access tcp` proxy on each machine that connects.
+
+**Server (once):** DNS + tunnel TCP rule to your AgentKMS Service (see [AgentKMS remote deployment](https://github.com/TheGenXCoder/agentkms#remote-access-cloudflare-tunnel)).
+
+**Client (each laptop/box):** run as a service so KPM can dial `localhost`:
+
+```bash
+# Foreground test
+cloudflared access tcp --hostname agentkms-mstr.example.com --url localhost:8443
+
+# macOS launchd or Linux systemd — same ExecStart as above; KeepAlive=true
+# Log: /tmp/cloudflared-agentkms-mstr.log
+```
+
+Then set `backends.mstr.server` to `https://localhost:8443` — not the public hostname. The public name is only for the cloudflared client.
+
+```bash
+curl -sk https://localhost:8443/healthz   # {"status":"ok"}
+kpm list
+```
+
+On LAN/VPN you can skip the tunnel and use internal DNS (e.g. `agentkms.catalyst9.ai` → odev) directly.
 
 ---
 
@@ -473,7 +546,9 @@ Extend KPM without forking. Plugins hook into the request pipeline as Go shared 
 | `kpm list [service]` | List secrets (metadata only). `--tag`, `--json`, `--include-deleted` |
 | `kpm describe <service/name>` | Show secret metadata (never values) |
 | `kpm history <service/name>` | Version timeline (never values) |
-| `kpm get <service/name>` | Retrieve a secret value |
+| `kpm get <ref>`                    | Retrieve a secret (`@backend/path` in v0.6.2+) |
+| `kpm sync`                         | Clear local secret cache |
+| `kpm update [-y] [--tag v0.6.2]`   | In-place binary upgrade from GitHub Releases |
 | `kpm remove <service/name>` | Soft-delete (`--purge` for hard delete) |
 | `kpm env --from <template>` | Resolve template (secure by default, `--plaintext` to opt out) |
 | `kpm run -- <cmd> [args]` | Run command with decrypted secrets |
@@ -546,7 +621,7 @@ KPM is the local client. [AgentKMS](https://github.com/TheGenXCoder/agentkms) is
 
 ## Configuration
 
-`~/.kpm/config.yaml`:
+`~/.kpm/config.yaml` — single backend (legacy):
 
 ```yaml
 server: https://agentkms.local:8443
@@ -557,7 +632,9 @@ default_template: .env.template
 session_key_ttl: 3600
 ```
 
-All CLI flags override config values. `~` is expanded automatically.
+Multi-backend (v0.6.2+) — see [Multi-backend](#multi-backend-v062) above.
+
+All CLI flags override config values. `~` is expanded automatically. After `kpm login <invite>`, cert paths are optional — resolved from `~/.kpm/identity/<server>/`.
 
 ---
 
@@ -575,7 +652,16 @@ curl -sL https://raw.githubusercontent.com/TheGenXCoder/kpm/main/tests/run-tests
 
 ## Roadmap
 
-Shipped in v0.6:
+Shipped in v0.6.2:
+- **Multi-backend** — `backends:` map, `@mstr/path` CLI refs, `${kms@mstr:…}` templates
+- **Release binaries** — linux/darwin amd64+arm64, windows amd64 on every tag
+
+Shipped in v0.6.1:
+- **`kpm login <invite-code>`** — one-step enroll + config + session
+- **Local-first reads** — `~/.kpm/cache` with TTL; `kpm sync` clears cache
+- **Per-server identity** — `~/.kpm/identity/<server>/`
+
+Shipped in v0.6.0:
 - **Windows support** — amd64 builds, PowerShell install, loopback JIT decrypt, `env --output powershell`
 
 Shipped in v0.3:
