@@ -69,7 +69,7 @@ ANTHROPIC_API_KEY=${kms:llm/anthropic}
 
 	// Resolve.
 	client := &Client{baseURL: srv.URL, httpClient: srv.Client()}
-	resolved, err := Resolve(context.Background(), client, entries)
+	resolved, err := Resolve(context.Background(), clientProvider(client), entries)
 	if err != nil {
 		t.Fatal(err)
 	}

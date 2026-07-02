@@ -9,6 +9,10 @@ import (
 	"testing"
 )
 
+func clientProvider(c *Client) ClientProvider {
+	return func(string) (*Client, error) { return c, nil }
+}
+
 func mockResolverServer(handlers map[string]http.HandlerFunc) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/auth/session" {
@@ -36,7 +40,7 @@ func TestResolveKVMissingKeyFallsToDefault(t *testing.T) {
 
 	client := &Client{baseURL: srv.URL, httpClient: srv.Client()}
 	entries, _ := ParseTemplate(strings.NewReader("PORT=${kms:kv/app/config#missing_key:-9090}\n"))
-	resolved, err := Resolve(context.Background(), client, entries)
+	resolved, err := Resolve(context.Background(), clientProvider(client), entries)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +62,7 @@ func TestResolveKVMissingKeyNoDefaultErrors(t *testing.T) {
 
 	client := &Client{baseURL: srv.URL, httpClient: srv.Client()}
 	entries, _ := ParseTemplate(strings.NewReader("PORT=${kms:kv/app/config#missing_key}\n"))
-	_, err := Resolve(context.Background(), client, entries)
+	_, err := Resolve(context.Background(), clientProvider(client), entries)
 	if err == nil {
 		t.Fatal("expected error for missing key without default")
 	}
@@ -72,7 +76,7 @@ func TestResolveKVFetchErrorFallsToDefault(t *testing.T) {
 
 	client := &Client{baseURL: srv.URL, httpClient: srv.Client()}
 	entries, _ := ParseTemplate(strings.NewReader("DB=${kms:kv/nonexistent/path#key:-fallback}\n"))
-	resolved, err := Resolve(context.Background(), client, entries)
+	resolved, err := Resolve(context.Background(), clientProvider(client), entries)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +91,7 @@ func TestResolveKVFetchErrorNoDefaultErrors(t *testing.T) {
 
 	client := &Client{baseURL: srv.URL, httpClient: srv.Client()}
 	entries, _ := ParseTemplate(strings.NewReader("DB=${kms:kv/nonexistent/path#key}\n"))
-	_, err := Resolve(context.Background(), client, entries)
+	_, err := Resolve(context.Background(), clientProvider(client), entries)
 	if err == nil {
 		t.Fatal("expected error for fetch failure without default")
 	}
@@ -99,7 +103,7 @@ func TestResolveLLMFetchErrorFallsToDefault(t *testing.T) {
 
 	client := &Client{baseURL: srv.URL, httpClient: srv.Client()}
 	entries, _ := ParseTemplate(strings.NewReader("OPENAI_KEY=${kms:llm/openai:-default-key}\n"))
-	resolved, err := Resolve(context.Background(), client, entries)
+	resolved, err := Resolve(context.Background(), clientProvider(client), entries)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +118,7 @@ func TestResolveLLMFetchErrorNoDefaultErrors(t *testing.T) {
 
 	client := &Client{baseURL: srv.URL, httpClient: srv.Client()}
 	entries, _ := ParseTemplate(strings.NewReader("OPENAI_KEY=${kms:llm/openai}\n"))
-	_, err := Resolve(context.Background(), client, entries)
+	_, err := Resolve(context.Background(), clientProvider(client), entries)
 	if err == nil {
 		t.Fatal("expected error for LLM fetch failure without default")
 	}
@@ -126,7 +130,7 @@ func TestResolvePlainValue(t *testing.T) {
 
 	client := &Client{baseURL: srv.URL, httpClient: srv.Client()}
 	entries, _ := ParseTemplate(strings.NewReader("APP_NAME=static-value\n"))
-	resolved, err := Resolve(context.Background(), client, entries)
+	resolved, err := Resolve(context.Background(), clientProvider(client), entries)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +156,7 @@ func TestResolveRegistryPathWithValueField(t *testing.T) {
 	client := &Client{baseURL: srv.URL, httpClient: srv.Client()}
 	// Registry path (no kv/ or llm/ prefix)
 	entries, _ := ParseTemplate(strings.NewReader("CF_TOKEN=${kms:cloudflare/token}\n"))
-	resolved, err := Resolve(context.Background(), client, entries)
+	resolved, err := Resolve(context.Background(), clientProvider(client), entries)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +178,7 @@ func TestResolveRegistryPathWithSpecificField(t *testing.T) {
 
 	client := &Client{baseURL: srv.URL, httpClient: srv.Client()}
 	entries, _ := ParseTemplate(strings.NewReader("DB_PASS=${kms:db/creds#password}\n"))
-	resolved, err := Resolve(context.Background(), client, entries)
+	resolved, err := Resolve(context.Background(), clientProvider(client), entries)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +197,7 @@ func TestResolveRegistryPathMissingField(t *testing.T) {
 
 	client := &Client{baseURL: srv.URL, httpClient: srv.Client()}
 	entries, _ := ParseTemplate(strings.NewReader("DB_PASS=${kms:db/creds#nonexistent}\n"))
-	_, err := Resolve(context.Background(), client, entries)
+	_, err := Resolve(context.Background(), clientProvider(client), entries)
 	if err == nil {
 		t.Fatal("expected error for missing field")
 	}
@@ -213,7 +217,7 @@ func TestResolveRegistryPathNoValueFieldOrKey(t *testing.T) {
 
 	client := &Client{baseURL: srv.URL, httpClient: srv.Client()}
 	entries, _ := ParseTemplate(strings.NewReader("DB_CREDS=${kms:db/creds}\n"))
-	_, err := Resolve(context.Background(), client, entries)
+	_, err := Resolve(context.Background(), clientProvider(client), entries)
 	if err == nil {
 		t.Fatal("expected error for multi-field secret without key")
 	}
@@ -225,7 +229,7 @@ func TestResolveRegistryFetchErrorWithDefault(t *testing.T) {
 
 	client := &Client{baseURL: srv.URL, httpClient: srv.Client()}
 	entries, _ := ParseTemplate(strings.NewReader("TOKEN=${kms:cloudflare/token:-fallback-token}\n"))
-	resolved, err := Resolve(context.Background(), client, entries)
+	resolved, err := Resolve(context.Background(), clientProvider(client), entries)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +257,7 @@ func TestResolveLLMCaching(t *testing.T) {
 	// Two entries referencing same LLM provider
 	tmpl := "KEY1=${kms:llm/anthropic}\nKEY2=${kms:llm/anthropic}\n"
 	entries, _ := ParseTemplate(strings.NewReader(tmpl))
-	_, err := Resolve(context.Background(), client, entries)
+	_, err := Resolve(context.Background(), clientProvider(client), entries)
 	if err != nil {
 		t.Fatal(err)
 	}

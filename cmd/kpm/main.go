@@ -80,7 +80,7 @@ Examples:
   kpm cred rotate blog-audit-pat
 `
 
-var version = "0.6.1"
+var version = "0.6.2"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -898,7 +898,32 @@ func ensureLocalDevServer(cfg *kpm.Config) {
 }
 
 func buildClient(cfg *kpm.Config) *kpm.Client {
-	return getClient(cfg, false)
+	return buildClientForBackend(cfg, "")
+}
+
+func buildClientForBackend(cfg *kpm.Config, backend string) *kpm.Client {
+	sub, err := cfg.ConfigForBackend(backend)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	return getClient(sub, false)
+}
+
+func makeClientProvider(cfg *kpm.Config) kpm.ClientProvider {
+	cache := map[string]*kpm.Client{}
+	return func(backend string) (*kpm.Client, error) {
+		if c, ok := cache[backend]; ok {
+			return c, nil
+		}
+		sub, err := cfg.ConfigForBackend(backend)
+		if err != nil {
+			return nil, err
+		}
+		c := getClient(sub, false)
+		cache[backend] = c
+		return c, nil
+	}
 }
 
 // getClient creates a client for cfg, with automatic failover to cfg.Fallback
@@ -1040,8 +1065,8 @@ func runEnv(ctx context.Context, cfg *kpm.Config, tmplPath, format string, plain
 		os.Exit(1)
 	}
 
-	client := buildClient(cfg)
-	resolved, err := kpm.Resolve(ctx, client, entries)
+	provider := makeClientProvider(cfg)
+	resolved, err := kpm.Resolve(ctx, provider, entries)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error resolving secrets: %v\n", err)
 		os.Exit(1)
@@ -1292,8 +1317,8 @@ func runRun(ctx context.Context, cfg *kpm.Config, tmplPath string, cmdArgs []str
 		os.Exit(1)
 	}
 
-	client := buildClient(cfg)
-	resolved, err := kpm.Resolve(ctx, client, entries)
+	provider := makeClientProvider(cfg)
+	resolved, err := kpm.Resolve(ctx, provider, entries)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error resolving secrets: %v\n", err)
 		os.Exit(1)
@@ -1303,6 +1328,8 @@ func runRun(ctx context.Context, cfg *kpm.Config, tmplPath string, cmdArgs []str
 			kpm.ZeroBytes(resolved[i].PlainValue)
 		}
 	}()
+
+	client := buildClient(cfg) // default backend for strict decrypt listener
 
 	// Apply per-tool allow-list filtering when --secure is set.
 	if secure {
@@ -1449,6 +1476,15 @@ func runRun(ctx context.Context, cfg *kpm.Config, tmplPath string, cmdArgs []str
 }
 
 func runGet(ctx context.Context, cfg *kpm.Config, ref string, verbose, strict bool) {
+	backend, rest := kpm.SplitBackendRef(ref)
+	if rest == "" && backend != "" {
+		fmt.Fprintf(os.Stderr, "error: path required after @%s\n", backend)
+		os.Exit(1)
+	}
+	if rest == "" {
+		rest = ref
+	}
+
 	if !strict && cfg.CacheTTLSec > 0 {
 		if cache, err := kpm.NewSecretCache(); err == nil {
 			if val, ok := cache.Get(ref, cfg.CacheTTLSec); ok {
@@ -1458,15 +1494,15 @@ func runGet(ctx context.Context, cfg *kpm.Config, ref string, verbose, strict bo
 		}
 	}
 
-	client := buildClient(cfg)
+	client := buildClientForBackend(cfg, backend)
 
-	parsed, ok := kpm.ParseKMSRef("${kms:" + ref + "}")
+	parsed, ok := kpm.ParseKMSRef("${kms:" + rest + "}")
 	if !ok {
 		// Not a kms:// ref — try as a registry path (e.g. "cloudflare/dns-token").
-		secrets, err := client.FetchRegistrySecret(ctx, ref)
+		secrets, err := client.FetchRegistrySecret(ctx, rest)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			fmt.Fprintf(os.Stderr, "tip: use kv/<path>#<key> for KV refs or llm/<provider> for LLM credentials\n")
+			fmt.Fprintf(os.Stderr, "tip: use @backend/path, kv/<path>#<key>, or llm/<provider>\n")
 			os.Exit(1)
 		}
 		defer kpm.ZeroMap(secrets)
@@ -1514,7 +1550,7 @@ func runGet(ctx context.Context, cfg *kpm.Config, ref string, verbose, strict bo
 
 	default:
 		// Unknown kms: type — also fall back to registry path.
-		secrets, err := client.FetchRegistrySecret(ctx, ref)
+		secrets, err := client.FetchRegistrySecret(ctx, rest)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "unknown ref type %q and registry fetch failed: %v\n", parsed.Type, err)
 			os.Exit(1)

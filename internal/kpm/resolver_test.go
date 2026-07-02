@@ -51,7 +51,7 @@ OPENAI_KEY=${kms:llm/openai}
 		t.Fatal(err)
 	}
 
-	resolved, err := Resolve(context.Background(), client, entries)
+	resolved, err := Resolve(context.Background(), clientProvider(client), entries)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestResolveWithDefault(t *testing.T) {
 
 	entries, _ := ParseTemplate(strings.NewReader("PORT=${kms:kv/app/config#port:-8080}\n"))
 
-	resolved, err := Resolve(context.Background(), client, entries)
+	resolved, err := Resolve(context.Background(), clientProvider(client), entries)
 	if err != nil {
 		t.Fatalf("Resolve with default: %v", err)
 	}

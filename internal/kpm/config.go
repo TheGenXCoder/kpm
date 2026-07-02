@@ -50,6 +50,16 @@ type Config struct {
 
 	// CacheTTLSec is how long locally cached secret values remain valid (default 900).
 	CacheTTLSec int `yaml:"cache_ttl_sec"`
+
+	// DefaultBackend is the named backend used when no @backend prefix is given.
+	DefaultBackend string `yaml:"default_backend"`
+
+	// Backends maps short names (mstr, uta, local) to AgentKMS connection settings.
+	// Use @name/path in CLI or ${kms@name:...} in templates.
+	Backends map[string]*BackendConfig `yaml:"backends"`
+
+	// backendByName is populated by FinalizeBackends after LoadConfig.
+	backendByName map[string]*Config `yaml:"-"`
 }
 
 // DefaultConfigPath returns the default config file path.
@@ -107,6 +117,9 @@ func LoadConfig(path string) (*Config, error) {
 	cfg.CA = ExpandHome(cfg.CA)
 
 	_ = cfg.ResolveIdentityPaths()
+	if err := cfg.FinalizeBackends(); err != nil {
+		return nil, err
+	}
 
 	return cfg, nil
 }

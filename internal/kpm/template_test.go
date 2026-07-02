@@ -27,8 +27,18 @@ func TestParseKMSRef(t *testing.T) {
 			ok:    true,
 		},
 		{
-			input: "${kms:kv/app/config#port:-8080}",
-			want:  KMSReference{Type: "kv", Path: "app/config", Key: "port", Default: "8080"},
+			input: "${kms:kv/db/prod#port:-8080}",
+			want:  KMSReference{Type: "kv", Path: "db/prod", Key: "port", Default: "8080"},
+			ok:    true,
+		},
+		{
+			input: "${kms@mstr:uta/sandbox/winrm-user}",
+			want:  KMSReference{Backend: "mstr", Type: "uta", Path: "sandbox/winrm-user"},
+			ok:    true,
+		},
+		{
+			input: "${kms@uta:kv/uta/sandbox/adapter-smoke#value}",
+			want:  KMSReference{Backend: "uta", Type: "kv", Path: "uta/sandbox/adapter-smoke", Key: "value"},
 			ok:    true,
 		},
 		{

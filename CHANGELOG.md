@@ -4,6 +4,21 @@ All notable changes to KPM are documented here. Format follows [Keep a Changelog
 
 ## [Unreleased]
 
+## [0.6.2] — 2026-07-02
+
+### Added
+- **Multi-backend config** — `backends:` map with `default_backend` for personal (mstr), UTA, local dev, etc.
+- `@backend/path` syntax on CLI: `kpm get @mstr/cloudflare/dns-token`
+- `${kms@backend:type/path#key}` in templates for cross-store resolves in one run
+- Per-backend AgentKMS clients in the resolver (batched KV reads per backend)
+
+## [0.6.1] — 2026-07-01
+
+### Added
+- `kpm login <kpmi1_code>` — single-step invite enrollment (CA pin, enroll, config, session)
+- Local-first reads via `~/.kpm/cache`; `kpm sync` clears cache
+- Client identity under `~/.kpm/identity/<server>/` (config needs server URL only)
+
 ## [0.6.0] — 2026-06-28
 
 ### Added

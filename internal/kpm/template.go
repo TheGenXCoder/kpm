@@ -10,16 +10,17 @@ import (
 	"strings"
 )
 
-// kmsRefPattern matches ${kms:type/path[#key][:-default]}.
-// Groups: [1]=type (llm|kv), [2]=path, [3]=key (optional), [4]=default (optional).
-var kmsRefPattern = regexp.MustCompile(`^\$\{kms:([a-z]+)/(.*?)(?:#([^:}]+))?(?::-(.*?))?\}$`)
+// kmsRefPattern matches ${kms[:@backend]:type/path[#key][:-default]}.
+// Groups: [1]=backend (optional), [2]=type, [3]=path, [4]=key, [5]=default.
+var kmsRefPattern = regexp.MustCompile(`^\$\{kms(?:@([a-zA-Z0-9_-]+))?:([a-z0-9]+)/(.+?)(?:#([^:}]+))?(?::-(.*?))?\}$`)
 
 // KMSReference is a parsed reference to a secret in AgentKMS.
 type KMSReference struct {
-	Type    string // "llm" or "kv"
-	Path    string // e.g. "db/prod" or "openai"
-	Key     string // e.g. "password" (empty for LLM refs)
-	Default string // fallback value (empty if none)
+	Backend string // named backend from config (empty = default)
+	Type    string // "llm", "kv", or registry service segment
+	Path    string
+	Key     string
+	Default string
 }
 
 // TemplateEntry is one line from a parsed .env.template.
@@ -38,10 +39,11 @@ func ParseKMSRef(s string) (KMSReference, bool) {
 		return KMSReference{}, false
 	}
 	return KMSReference{
-		Type:    m[1],
-		Path:    m[2],
-		Key:     m[3],
-		Default: m[4],
+		Backend: m[1],
+		Type:    m[2],
+		Path:    m[3],
+		Key:     m[4],
+		Default: m[5],
 	}, true
 }
 

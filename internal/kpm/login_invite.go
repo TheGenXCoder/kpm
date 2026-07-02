@@ -160,6 +160,9 @@ tenant: %q
 }
 
 // ResolveIdentityPaths populates Cert, Key, CA from ~/.kpm/identity/<server>/ when unset.
+// Only applies when the identity directory actually exists (i.e. the user
+// enrolled via `kpm login <invitecode>`) — pre-invite setups with certs in
+// legacy locations keep their config-file/flag behavior untouched.
 func (cfg *Config) ResolveIdentityPaths() error {
 	if cfg.Server == "" {
 		return nil
@@ -170,6 +173,9 @@ func (cfg *Config) ResolveIdentityPaths() error {
 	dir, err := IdentityDir(cfg.Server)
 	if err != nil {
 		return err
+	}
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		return nil
 	}
 	if cfg.Cert == "" {
 		cfg.Cert = filepath.Join(dir, "client.crt")

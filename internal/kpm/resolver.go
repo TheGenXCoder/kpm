@@ -14,31 +14,48 @@ type ResolvedEntry struct {
 	Source     string // "agentkms", "cache", "default", or "" (passthrough)
 }
 
+// ClientProvider returns an AgentKMS client for a named backend (empty = default).
+type ClientProvider func(backend string) (*Client, error)
+
 // Resolve takes parsed template entries and fetches all KMS values.
-// It batches requests: multiple refs to the same KV path produce one API call.
-func Resolve(ctx context.Context, client *Client, entries []TemplateEntry) ([]ResolvedEntry, error) {
+// It batches requests per backend: multiple refs to the same KV path produce one API call.
+func Resolve(ctx context.Context, clients ClientProvider, entries []TemplateEntry) ([]ResolvedEntry, error) {
+	type kvKey struct {
+		backend string
+		path    string
+	}
 	type kvResult struct {
 		secrets map[string][]byte
 		err     error
 	}
-	kvCache := map[string]*kvResult{}
+	kvCache := map[kvKey]*kvResult{}
 
-	// Prefetch: collect unique KV paths.
+	// Prefetch: collect unique KV paths per backend.
 	for _, e := range entries {
 		if !e.IsKMSRef || e.Ref.Type != "kv" {
 			continue
 		}
-		if _, ok := kvCache[e.Ref.Path]; !ok {
+		key := kvKey{backend: e.Ref.Backend, path: e.Ref.Path}
+		if _, ok := kvCache[key]; !ok {
+			client, err := clients(e.Ref.Backend)
+			if err != nil {
+				kvCache[key] = &kvResult{err: err}
+				continue
+			}
 			cred, err := client.FetchGeneric(ctx, e.Ref.Path)
 			if err != nil {
-				kvCache[e.Ref.Path] = &kvResult{err: err}
+				kvCache[key] = &kvResult{err: err}
 			} else {
-				kvCache[e.Ref.Path] = &kvResult{secrets: cred.Secrets}
+				kvCache[key] = &kvResult{secrets: cred.Secrets}
 			}
 		}
 	}
 
-	llmCache := map[string]*LLMCredential{}
+	type llmKey struct {
+		backend string
+		path    string
+	}
+	llmCache := map[llmKey]*LLMCredential{}
 
 	resolved := make([]ResolvedEntry, 0, len(entries))
 	for _, e := range entries {
@@ -55,9 +72,14 @@ func Resolve(ctx context.Context, client *Client, entries []TemplateEntry) ([]Re
 			continue
 		}
 
+		client, err := clients(e.Ref.Backend)
+		if err != nil {
+			return nil, fmt.Errorf("resolve %s: %w", e.EnvKey, err)
+		}
+
 		switch e.Ref.Type {
 		case "kv":
-			result := kvCache[e.Ref.Path]
+			result := kvCache[kvKey{backend: e.Ref.Backend, path: e.Ref.Path}]
 			if result.err != nil {
 				if e.Ref.Default != "" {
 					re.PlainValue = []byte(e.Ref.Default)
@@ -82,7 +104,8 @@ func Resolve(ctx context.Context, client *Client, entries []TemplateEntry) ([]Re
 			re.Source = "agentkms"
 
 		case "llm":
-			if _, ok := llmCache[e.Ref.Path]; !ok {
+			lk := llmKey{backend: e.Ref.Backend, path: e.Ref.Path}
+			if _, ok := llmCache[lk]; !ok {
 				cred, err := client.FetchLLM(ctx, e.Ref.Path)
 				if err != nil {
 					if e.Ref.Default != "" {
@@ -93,9 +116,9 @@ func Resolve(ctx context.Context, client *Client, entries []TemplateEntry) ([]Re
 					}
 					return nil, fmt.Errorf("resolve %s: %w", e.EnvKey, err)
 				}
-				llmCache[e.Ref.Path] = cred
+				llmCache[lk] = cred
 			}
-			cred := llmCache[e.Ref.Path]
+			cred := llmCache[lk]
 			re.PlainValue = make([]byte, len(cred.APIKey))
 			copy(re.PlainValue, cred.APIKey)
 			re.Source = "agentkms"
