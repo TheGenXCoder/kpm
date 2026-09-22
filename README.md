@@ -391,7 +391,7 @@ backends:
 
 default_template: .env.template
 session_key_ttl: 3600
-cache_ttl_sec: 900
+cache_ttl_sec: 900 # seconds; explicit 0 disables the local kpm get cache
 trust_domain: catalyst9.local
 tenant: catalyst9
 ```

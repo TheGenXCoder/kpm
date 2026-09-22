@@ -34,26 +34,111 @@ func (c *SecretCache) fileKey(ref string) string {
 }
 
 // Get returns a cached value if present and not expired.
+// ttlSec <= 0 disables the cache: the entry is deleted and reported as a miss.
+// Expired and unreadable entries are deleted rather than left on disk.
 func (c *SecretCache) Get(ref string, ttlSec int) ([]byte, bool) {
-	if ttlSec <= 0 {
-		return nil, false
-	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	data, err := os.ReadFile(c.fileKey(ref))
+	path := c.fileKey(ref)
+	if ttlSec <= 0 {
+		_ = os.Remove(path)
+		return nil, false
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, false
 	}
 	var e cacheEntry
 	if json.Unmarshal(data, &e) != nil {
+		_ = os.Remove(path)
 		return nil, false
 	}
 	if time.Now().Unix()-e.FetchedAt > int64(ttlSec) {
+		_ = os.Remove(path)
 		return nil, false
 	}
 	out := make([]byte, len(e.Value))
 	copy(out, e.Value)
 	return out, true
+}
+
+// Sweep deletes cache files that must not be served.
+// ttlSec <= 0 removes every cached file (cache disabled).
+// ttlSec > 0 removes expired or unreadable entries and leaves fresh ones.
+func (c *SecretCache) Sweep(ttlSec int) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entries, err := os.ReadDir(c.dir)
+	if err != nil {
+		return err
+	}
+	now := time.Now().Unix()
+	for _, ent := range entries {
+		if ent.IsDir() {
+			continue
+		}
+		path := filepath.Join(c.dir, ent.Name())
+		if ttlSec <= 0 {
+			_ = os.Remove(path)
+			continue
+		}
+		if !strings.HasSuffix(ent.Name(), ".json") {
+			continue
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var e cacheEntry
+		if json.Unmarshal(data, &e) != nil || now-e.FetchedAt > int64(ttlSec) {
+			_ = os.Remove(path)
+		}
+	}
+	return nil
+}
+
+// Invalidate removes cache entries for the given refs. Missing files are not an error.
+func (c *SecretCache) Invalidate(refs ...string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var first error
+	for _, ref := range refs {
+		if ref == "" {
+			continue
+		}
+		if err := os.Remove(c.fileKey(ref)); err != nil && !os.IsNotExist(err) && first == nil {
+			first = err
+		}
+	}
+	return first
+}
+
+// CacheRefsForPath returns the cache keys that may hold path.
+// kpm get stores the ref the user typed, which is either path or @backend/path.
+func CacheRefsForPath(cfg *Config, path string) []string {
+	refs := make([]string, 0, 4)
+	seen := map[string]bool{}
+	add := func(ref string) {
+		if ref == "" || seen[ref] {
+			return
+		}
+		seen[ref] = true
+		refs = append(refs, ref)
+	}
+	add(path)
+	if cfg == nil {
+		return refs
+	}
+	if cfg.DefaultBackend != "" {
+		add("@" + cfg.DefaultBackend + "/" + path)
+	}
+	for name := range cfg.Backends {
+		add("@" + name + "/" + path)
+	}
+	for name := range cfg.backendByName {
+		add("@" + name + "/" + path)
+	}
+	return refs
 }
 
 // Put stores a value in the cache.

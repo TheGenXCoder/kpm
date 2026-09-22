@@ -20,6 +20,11 @@ type AddOptions struct {
 	Type        string
 	Expires     string
 	Force       bool // skip confirmation prompt when overwriting
+
+	// Cache, when set, is invalidated for Path and CacheRefs after a successful write.
+	Cache *SecretCache
+	// CacheRefs are extra keys for the same secret, such as @backend/path.
+	CacheRefs []string
 }
 
 // RunAdd stores a secret in AgentKMS.
@@ -105,5 +110,11 @@ func RunAdd(ctx context.Context, w io.Writer, client *Client, opts AddOptions) e
 		tagStr = fmt.Sprintf(" (tagged: %s)", strings.Join(opts.Tags, ", "))
 	}
 	fmt.Fprintf(w, "Stored %s v%d%s [%s]\n", result.Path, result.Version, tagStr, secretType)
+	if opts.Cache != nil {
+		refs := append([]string{opts.Path}, opts.CacheRefs...)
+		if err := opts.Cache.Invalidate(refs...); err != nil {
+			return fmt.Errorf("stored %s but failed to clear local cache: %w", result.Path, err)
+		}
+	}
 	return nil
 }

@@ -4,6 +4,10 @@ All notable changes to KPM are documented here. Format follows [Keep a Changelog
 
 ## [Unreleased]
 
+### Fixed
+- `kpm add` drops the local value cache for the secret it writes, so the next `kpm get` does not keep serving the previous version until `cache_ttl_sec` elapses.
+- Expired `~/.kpm/cache` files are deleted instead of left on disk. An explicit `cache_ttl_sec: 0` disables the cache; omitting the key still defaults to 900 seconds.
+
 ## [0.6.2] — 2026-07-02
 
 ### Added

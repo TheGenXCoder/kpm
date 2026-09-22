@@ -225,6 +225,47 @@ func TestRunAddExistingWithForceOverwrites(t *testing.T) {
 	}
 }
 
+func TestRunAddInvalidatesCache(t *testing.T) {
+	httpClient, baseURL := mockServerForAdd(t, nil)
+	c := &Client{baseURL: baseURL, httpClient: httpClient}
+	cache := &SecretCache{dir: t.TempDir()}
+	if err := cache.Put("mail/box", []byte("old")); err != nil {
+		t.Fatal(err)
+	}
+	if err := cache.Put("@mstr/mail/box", []byte("old")); err != nil {
+		t.Fatal(err)
+	}
+	if err := cache.Put("other/secret", []byte("keep")); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	secretFile := dir + "/value.txt"
+	if err := os.WriteFile(secretFile, []byte("new-value"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	err := RunAdd(context.Background(), &buf, c, AddOptions{
+		Path:      "mail/box",
+		FromFile:  secretFile,
+		Cache:     cache,
+		CacheRefs: []string{"@mstr/mail/box"},
+	})
+	if err != nil {
+		t.Fatalf("RunAdd: %v", err)
+	}
+	if _, err := os.Stat(cache.fileKey("mail/box")); !os.IsNotExist(err) {
+		t.Fatalf("rotated path still cached: %v", err)
+	}
+	if _, err := os.Stat(cache.fileKey("@mstr/mail/box")); !os.IsNotExist(err) {
+		t.Fatalf("backend ref still cached: %v", err)
+	}
+	if _, err := os.Stat(cache.fileKey("other/secret")); err != nil {
+		t.Fatalf("unrelated cache entry removed: %v", err)
+	}
+}
+
 // === RunList tests ===
 
 func mockServerForList(t *testing.T, secrets []SecretMetadata) (*http.Client, string) {

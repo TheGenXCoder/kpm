@@ -693,6 +693,12 @@ func main() {
 			Type:        *addType,
 			Expires:     *addExpires,
 			Force:       *addForce,
+			CacheRefs:   kpm.CacheRefsForPath(cfg, path),
+		}
+		if cache, cacheErr := kpm.NewSecretCache(); cacheErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not open secret cache: %v\n", cacheErr)
+		} else {
+			opts.Cache = cache
 		}
 		if err := kpm.RunAdd(ctx, os.Stderr, client, opts); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -1485,11 +1491,14 @@ func runGet(ctx context.Context, cfg *kpm.Config, ref string, verbose, strict bo
 		rest = ref
 	}
 
-	if !strict && cfg.CacheTTLSec > 0 {
+	if !strict {
 		if cache, err := kpm.NewSecretCache(); err == nil {
-			if val, ok := cache.Get(ref, cfg.CacheTTLSec); ok {
-				os.Stdout.Write(val)
-				return
+			_ = cache.Sweep(cfg.CacheTTLSec)
+			if cfg.CacheTTLSec > 0 {
+				if val, ok := cache.Get(ref, cfg.CacheTTLSec); ok {
+					os.Stdout.Write(val)
+					return
+				}
 			}
 		}
 	}

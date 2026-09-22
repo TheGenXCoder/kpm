@@ -48,7 +48,9 @@ type Config struct {
 	// only on the device certificate and does not require step-up.
 	StepUpTTL int `yaml:"step_up_ttl"`
 
-	// CacheTTLSec is how long locally cached secret values remain valid (default 900).
+	// CacheTTLSec is how long locally cached kpm get values stay valid, in seconds.
+	// Omitted or negative values default to 900. An explicit 0 disables the cache:
+	// reads go to AgentKMS, and leftover cache files are deleted on the next get.
 	CacheTTLSec int `yaml:"cache_ttl_sec"`
 
 	// DefaultBackend is the named backend used when no @backend prefix is given.
@@ -107,8 +109,13 @@ func LoadConfig(path string) (*Config, error) {
 	if cfg.StepUpTTL <= 0 {
 		cfg.StepUpTTL = 300 // 5 minutes, sudo-like
 	}
-	if cfg.CacheTTLSec <= 0 {
-		cfg.CacheTTLSec = 900 // 15 minutes
+	// Distinguish "key omitted" (default 900) from "explicit 0" (cache off).
+	explicitCacheTTL, err := yamlTopLevelKey(data, "cache_ttl_sec")
+	if err != nil {
+		return nil, fmt.Errorf("parse config %s: %w", path, err)
+	}
+	if !explicitCacheTTL || cfg.CacheTTLSec < 0 {
+		cfg.CacheTTLSec = 900
 	}
 
 	// Expand ~ in paths.
@@ -122,6 +129,30 @@ func LoadConfig(path string) (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// yamlTopLevelKey reports whether key is set on the root mapping.
+func yamlTopLevelKey(data []byte, key string) (bool, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return false, err
+	}
+	root := &doc
+	if doc.Kind == yaml.DocumentNode {
+		if len(doc.Content) == 0 {
+			return false, nil
+		}
+		root = doc.Content[0]
+	}
+	if root.Kind != yaml.MappingNode {
+		return false, nil
+	}
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value == key {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // ExpandHome replaces a leading ~ with the user's home directory.
